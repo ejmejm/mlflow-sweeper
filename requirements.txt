@@ -3,4 +3,5 @@ mlflow
 numpy
 omegaconf
 optuna
+pytest
 
