@@ -1,6 +1,6 @@
 # mlflow-sweeper
 
-Run Optuna-driven parameter sweeps while logging trials to MLflow.
+This module runs parameter sweeps (currently grid search) by executing a user-provided command for each trial and logging results to MLflow. It uses Optuna to enumerate/coordinate trials and supports both single-agent runs and multi-agent/distributed execution against shared storages.
 
 - **Sweep identity / config ID**: each sweep is keyed by `experiment/sweep_name` (used as the Optuna study name) plus the configured storages. This lets you safely resume and/or distribute the *same* sweep across multiple agents, and also run *multiple different* sweeps at once (as long as their `experiment/sweep_name` differs).
 - **Single-agent vs multi-agent**:
@@ -15,12 +15,6 @@ Run Optuna-driven parameter sweeps while logging trials to MLflow.
 python sweep.py path/to/sweep.yaml
 ```
 
-### Run multiple sweeps (sequentially) from one command
-
-```bash
-python sweep.py path/to/sweep_a.yaml path/to/sweep_b.yaml
-```
-
 ### Use local parallelism
 
 ```bash
@@ -33,10 +27,10 @@ Run the same command on multiple agents that share the same storages:
 
 ```bash
 # Agent 1
-python sweep.py path/to/sweep.yaml -j 1
+python sweep.py path/to/sweep.yaml
 
 # Agent 2 (same config + same storages)
-python sweep.py path/to/sweep.yaml -j 1
+python sweep.py path/to/sweep.yaml
 ```
 
 Note: coordination relies on file locks in `output_dir`, so for true multi-host coordination, `output_dir` should be on a shared filesystem.
@@ -45,6 +39,12 @@ Note: coordination relies on file locks in `output_dir`, so for true multi-host 
 
 ```bash
 python sweep.py path/to/sweep.yaml --delete
+```
+
+### Run multiple sweeps (sequentially) from one command
+
+```bash
+python sweep.py path/to/sweep_a.yaml path/to/sweep_b.yaml
 ```
 
 ## Config format (minimal example)
@@ -71,6 +71,52 @@ spec:
 ```
 
 The sweep runner appends parameters to `command` as `name=value` tokens and executes the resulting command for each trial, nesting each trial as a child MLflow run under a single parent run for the sweep.
+
+## Parameter value types
+
+In `parameters:`, each entry can be specified in a few ways:
+
+- **Atomic (single fixed value)**:
+
+```yaml
+parameters:
+  seed: 0
+  model_name: "resnet18"
+```
+
+- **Categorical (explicit set of choices)**:
+
+```yaml
+parameters:
+  batch_size: [32, 64, 128]
+  optimizer: ["adam", "sgd"]
+```
+
+- **Typed dictionary forms** (equivalent to the above, and adds ranges):
+
+```yaml
+parameters:
+  # categorical (typed)
+  activation:
+    type: categorical
+    values: ["relu", "gelu"]
+
+  # int range
+  depth:
+    type: int_range
+    low: 2
+    high: 8
+    step: 1        # optional (default 1)
+    log: false     # optional (default false)
+
+  # float range
+  dropout:
+    type: float_range
+    low: 0.0
+    high: 0.5
+    step: 0.1      # optional; required if converting to a grid internally
+    log: false     # optional (default false)
+```
 
 ## TODO (moved from code)
 
