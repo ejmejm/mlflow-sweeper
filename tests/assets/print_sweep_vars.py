@@ -48,17 +48,13 @@ def main() -> None:
     for key, value in params.items():
         print(f"{key}={value}")
 
-    # Initialize MLflow and log params exactly as required by the tests.
-    try:
-        # MLflow 3.8+ exposes DEFAULT_TRACKING_URI (not MLFLOW_DEFAULT_TRACKING_URI).
-        from mlflow.tracking._tracking_service.utils import (  # type: ignore
-            DEFAULT_TRACKING_URI as MLFLOW_DEFAULT_TRACKING_URI,
-        )
-    except Exception:  # pragma: no cover
-        MLFLOW_DEFAULT_TRACKING_URI = "file:///tmp/mlruns"
-
     project = str(config.get("project", "test-project"))
-    mlflow.set_tracking_uri(config.get("mlflow_tracking_uri", MLFLOW_DEFAULT_TRACKING_URI))
+    mlflow_storage = config.get("mlflow_storage")
+    if mlflow_storage is None:
+        raise ValueError("Expected `mlflow_storage` to be provided to the subprocess.")
+
+    # Use the same tracking URI as the sweep runner (which sets `config.mlflow_storage`).
+    mlflow.set_tracking_uri(str(mlflow_storage))
     if os.environ.get("MLFLOW_RUN_ID") is None:
         mlflow.set_experiment(project)
     mlflow.start_run()

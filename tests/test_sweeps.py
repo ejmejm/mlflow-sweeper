@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import subprocess
 import sys
 
@@ -18,6 +19,36 @@ def _trial_param(run: mlflow.entities.Run, name: str) -> str | None:
     return str(value)
 
 
+def _expected_combinations(parameters: dict[str, list[str]], keys: list[str]) -> set[tuple[str, ...]]:
+    values = [parameters[k] for k in keys]
+    return set(itertools.product(*values))
+
+
+def _seen_combinations(
+    trial_runs: list[mlflow.entities.Run], keys: list[str]
+) -> set[tuple[str, ...]]:
+    seen: set[tuple[str, ...]] = set()
+    for run in trial_runs:
+        combo: list[str] = []
+        for k in keys:
+            value = _trial_param(run, k)
+            if value is None:
+                break
+            combo.append(value)
+        if len(combo) == len(keys):
+            seen.add(tuple(combo))
+    return seen
+
+
+def _assert_all_combinations_seen(
+    *, trial_runs: list[mlflow.entities.Run], keys: list[str], parameters: dict[str, list[str]]
+) -> None:
+    expected = _expected_combinations(parameters, keys)
+    seen = _seen_combinations(trial_runs, keys)
+    missing = expected.difference(seen)
+    assert not missing, f"Missing combinations for {keys}: {sorted(missing)}"
+
+
 def _assert_parent_and_get_trial_runs(*, harness: SweepHarness) -> list[mlflow.entities.Run]:
     runs = harness.list_mlflow_runs()
     parents = [r for r in runs if "optuna_study_name" in r.data.tags]
@@ -26,12 +57,15 @@ def _assert_parent_and_get_trial_runs(*, harness: SweepHarness) -> list[mlflow.e
 
 
 def test_grid_runs_all_4_combinations(sweep_harness: SweepHarness) -> None:
+    grid_params = {
+        "color": ["red", "blue"],
+        "shape": ["square", "circle"],
+    }
     config_path = sweep_harness.write_config(
         parameters={
-            "color": ["red", "blue"],
-            "shape": ["square", "circle"],
+            **grid_params,
             # Passed through to the subprocess script to satisfy the required MLflow init.
-            "mlflow_tracking_uri": sweep_harness.mlflow_storage,
+            "mlflow_storage": sweep_harness.mlflow_storage,
             "project": sweep_harness.experiment,
         }
     )
@@ -41,17 +75,9 @@ def test_grid_runs_all_4_combinations(sweep_harness: SweepHarness) -> None:
     trial_runs = _assert_parent_and_get_trial_runs(harness=sweep_harness)
     assert len(trial_runs) >= 4
 
-    seen: set[tuple[str, str]] = set()
-    for run in trial_runs:
-        color = _trial_param(run, "color")
-        shape = _trial_param(run, "shape")
-        if color is not None and shape is not None:
-            seen.add((color, shape))
-
-    assert ("red", "square") in seen
-    assert ("red", "circle") in seen
-    assert ("blue", "square") in seen
-    assert ("blue", "circle") in seen
+    _assert_all_combinations_seen(
+        trial_runs=trial_runs, keys=["color", "shape"], parameters=grid_params
+    )
 
 
 def test_delete_sweep_removes_optuna_and_mlflow_runs(sweep_harness: SweepHarness) -> None:
@@ -59,7 +85,7 @@ def test_delete_sweep_removes_optuna_and_mlflow_runs(sweep_harness: SweepHarness
         parameters={
             "a": ["0", "1"],
             "b": ["x", "y"],
-            "mlflow_tracking_uri": sweep_harness.mlflow_storage,
+            "mlflow_storage": sweep_harness.mlflow_storage,
             "project": sweep_harness.experiment,
         }
     )
@@ -88,12 +114,15 @@ def test_delete_sweep_removes_optuna_and_mlflow_runs(sweep_harness: SweepHarness
 
 
 def test_parallel_inprocess_jobs_does_not_double_runs(sweep_harness: SweepHarness) -> None:
+    grid_params = {
+        "x": ["0", "1"],
+        "y": ["0", "1"],
+        "z": ["0", "1"],  # 2*2*2 = 8 combos
+    }
     config_path = sweep_harness.write_config(
         parameters={
-            "x": ["0", "1"],
-            "y": ["0", "1"],
-            "z": ["0", "1"],  # 2*2*2 = 8 combos
-            "mlflow_tracking_uri": sweep_harness.mlflow_storage,
+            **grid_params,
+            "mlflow_storage": sweep_harness.mlflow_storage,
             "project": sweep_harness.experiment,
         }
     )
@@ -104,15 +133,21 @@ def test_parallel_inprocess_jobs_does_not_double_runs(sweep_harness: SweepHarnes
 
     # Duplicates are allowed, but we should not have >= 2x the base grid size.
     assert 0 < len(trial_runs) < 16
+    _assert_all_combinations_seen(
+        trial_runs=trial_runs, keys=["x", "y", "z"], parameters=grid_params
+    )
 
 
 def test_parallel_two_processes_does_not_double_runs(sweep_harness: SweepHarness) -> None:
+    grid_params = {
+        "x": ["0", "1"],
+        "y": ["0", "1"],
+        "z": ["0", "1"],  # 2*2*2 = 8 combos
+    }
     config_path = sweep_harness.write_config(
         parameters={
-            "x": ["0", "1"],
-            "y": ["0", "1"],
-            "z": ["0", "1"],  # 2*2*2 = 8 combos
-            "mlflow_tracking_uri": sweep_harness.mlflow_storage,
+            **grid_params,
+            "mlflow_storage": sweep_harness.mlflow_storage,
             "project": sweep_harness.experiment,
         }
     )
@@ -141,3 +176,6 @@ def test_parallel_two_processes_does_not_double_runs(sweep_harness: SweepHarness
     trial_runs = _assert_parent_and_get_trial_runs(harness=sweep_harness)
 
     assert 0 < len(trial_runs) < 16
+    _assert_all_combinations_seen(
+        trial_runs=trial_runs, keys=["x", "y", "z"], parameters=grid_params
+    )

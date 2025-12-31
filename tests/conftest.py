@@ -108,13 +108,12 @@ def sweep_harness() -> Iterator[SweepHarness]:
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     root_dir = tempfile.mkdtemp(prefix="mlflow_sweeper_test_", dir="/tmp")
     output_dir = os.path.join(root_dir, "output")
-    mlruns_dir = os.path.join(root_dir, "mlruns")
     os.makedirs(output_dir, exist_ok=True)
-    os.makedirs(mlruns_dir, exist_ok=True)
 
     optuna_db = os.path.join(root_dir, "optuna.db")
     optuna_storage = f"sqlite:///{optuna_db}"
-    mlflow_storage = f"file://{mlruns_dir}"
+    mlflow_db = os.path.join(root_dir, "mlflow.db")
+    mlflow_storage = f"sqlite:///{mlflow_db}"
 
     harness = SweepHarness(
         repo_root=repo_root,
