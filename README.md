@@ -9,16 +9,26 @@ This module runs parameter sweeps (currently grid search) by executing a user-pr
 
 ## How to run
 
+### Install (so you can run from anywhere)
+
+From the repo root:
+
+```bash
+pip install -e .
+```
+
+This installs a CLI named `mlflow-sweep`.
+
 ### Run one sweep config
 
 ```bash
-python sweep.py path/to/sweep.yaml
+mlflow-sweep path/to/sweep.yaml
 ```
 
 ### Use local parallelism
 
 ```bash
-python sweep.py path/to/sweep.yaml -j 4
+mlflow-sweep path/to/sweep.yaml -j 4
 ```
 
 ### Run distributed (multi-agent)
@@ -27,10 +37,10 @@ Run the same command on multiple agents that share the same storages:
 
 ```bash
 # Agent 1
-python sweep.py path/to/sweep.yaml
+mlflow-sweep path/to/sweep.yaml
 
 # Agent 2 (same config + same storages)
-python sweep.py path/to/sweep.yaml
+mlflow-sweep path/to/sweep.yaml
 ```
 
 Note: coordination relies on file locks in `output_dir`, so for true multi-host coordination, `output_dir` should be on a shared filesystem.
@@ -38,13 +48,13 @@ Note: coordination relies on file locks in `output_dir`, so for true multi-host 
 ### Delete a sweep
 
 ```bash
-python sweep.py path/to/sweep.yaml --delete
+mlflow-sweep path/to/sweep.yaml --delete
 ```
 
 ### Run multiple sweeps (sequentially) from one command
 
 ```bash
-python sweep.py path/to/sweep_a.yaml path/to/sweep_b.yaml
+mlflow-sweep path/to/sweep_a.yaml path/to/sweep_b.yaml
 ```
 
 ## Config format (minimal example)

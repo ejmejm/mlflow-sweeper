@@ -1,0 +1,36 @@
+## Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+dist/
+build/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+ENV/
+env/
+
+## Editors / OS
+.DS_Store
+.idea/
+.vscode/
+
+## MLflow / Optuna / sweep artifacts (common defaults)
+mlruns/
+mlruns.db
+optuna.db
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+## Local sweep outputs (often configured as ./sweeps)
+sweeps/
+
