@@ -24,6 +24,44 @@ from mlflow_sweeper.config import ParamSpec, config_params_to_spec_dict
 logger = logging.getLogger(__name__)
 
 
+def parse_args() -> argparse.Namespace:
+    """Parse CLI args for the sweep runner."""
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "config",
+        type = str,
+        nargs = "+",
+        help = (
+            "Path(s) to YAML or JSON file(s) containing sweep configuration. "
+            "A sweep will be run for each config file provided."
+        ),
+    )
+    parser.add_argument(
+        "-n",
+        "--n_trials",
+        type = int,
+        default = None,
+        help = (
+            "Number of trials to perform for the sweep. If None, will perform "
+            "until the study is marked as complete."
+        ),
+    )
+    parser.add_argument(
+        "-j",
+        "--n_jobs",
+        type = int,
+        default = 1,
+        help = "Number of parallel jobs in this call of the script.",
+    )
+    parser.add_argument(
+        "--delete",
+        action = "store_true",
+        help = "Delete all data associated with the MLflow sweep and Optuna study.",
+    )
+    return parser.parse_args()
+
+
 def get_study_name(config: DictConfig) -> str:
     """Optuna study name for this sweep."""
     return f"{config.experiment}/{config.sweep_name}"

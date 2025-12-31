@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import logging
 
-from mlflow_sweeper.config import load_configs, parse_args, validate_config
-from mlflow_sweeper.runner import delete_sweep, run_sweep
+from mlflow_sweeper.config import load_configs, validate_config
+from mlflow_sweeper.runner import delete_sweep, parse_args, run_sweep
 
 
 class ColorFormatter(logging.Formatter):
