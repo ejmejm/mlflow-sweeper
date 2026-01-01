@@ -85,6 +85,13 @@ def _optuna_study_lock_path(config: DictConfig) -> str:
     return os.path.join(config.output_dir, f"study_{lock_id}.lock")
 
 
+def _mlflow_db_lock_path(config: DictConfig) -> str:
+    """File lock path used to guard MLflow database initialization."""
+    storage = str(config.mlflow_storage)
+    lock_id = hashlib.md5(storage.encode("utf-8")).hexdigest()
+    return os.path.join(config.output_dir, f"mlflow_db_{lock_id}.lock")
+
+
 def _optuna_direction(config: DictConfig) -> str:
     """Optuna optimization direction for the study."""
     if "spec" not in config:
@@ -250,8 +257,10 @@ def run_sweep(args: argparse.Namespace, config: DictConfig) -> None:
 
     logger.info("Running sweep: %s/%s", config.experiment, config.sweep_name)
     mlflow.set_tracking_uri(config.mlflow_storage)
-    mlflow_client = MlflowClient(tracking_uri=config.mlflow_storage)
-    mlflow.set_experiment(str(config.experiment))
+    # Protect MLflow database initialization from concurrent access by multiple processes.
+    with FileLock(_mlflow_db_lock_path(config)):
+        mlflow_client = MlflowClient(tracking_uri=config.mlflow_storage)
+        mlflow.set_experiment(str(config.experiment))
     start_mlflow_parent_run(mlflow_client, config, study.study_name)
 
     dict_config = OmegaConf.to_container(config, throw_on_missing=True)
@@ -281,7 +290,9 @@ def delete_sweep(config: DictConfig) -> None:
     except KeyError:
         logger.warning("Could not find Optuna study: %s.", study_name)
 
-    mlflow_client = MlflowClient(tracking_uri=config.mlflow_storage)
+    # Protect MLflow database initialization from concurrent access by multiple processes.
+    with FileLock(_mlflow_db_lock_path(config)):
+        mlflow_client = MlflowClient(tracking_uri=config.mlflow_storage)
     experiment = mlflow_client.get_experiment_by_name(str(config.experiment))
     if experiment is None:
         logger.warning("Could not find MLflow experiment: %s.", config.experiment)
