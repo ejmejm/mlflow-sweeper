@@ -16,6 +16,7 @@ build/
 venv/
 ENV/
 env/
+**.history/
 
 ## Editors / OS
 .DS_Store
