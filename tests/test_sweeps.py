@@ -73,7 +73,7 @@ def test_grid_runs_all_4_combinations(sweep_harness: SweepHarness) -> None:
     sweep_harness.run_cli(config_path, "-n", "100", "-j", "1")
 
     trial_runs = _assert_parent_and_get_trial_runs(harness=sweep_harness)
-    assert len(trial_runs) >= 4
+    assert len(trial_runs) == 4
 
     _assert_all_combinations_seen(
         trial_runs=trial_runs, keys=["color", "shape"], parameters=grid_params
@@ -127,12 +127,12 @@ def test_parallel_inprocess_jobs_does_not_double_runs(sweep_harness: SweepHarnes
         }
     )
 
-    sweep_harness.run_cli(config_path, "-n", "100", "-j", "2")
+    sweep_harness.run_cli(config_path, "-n", "100", "-j", "4")
 
     trial_runs = _assert_parent_and_get_trial_runs(harness=sweep_harness)
 
-    # Duplicates are allowed, but we should not have >= 2x the base grid size.
-    assert 0 < len(trial_runs) < 16
+    # Grid search should produce exactly 8 combinations (2*2*2).
+    assert len(trial_runs) == 8
     _assert_all_combinations_seen(
         trial_runs=trial_runs, keys=["x", "y", "z"], parameters=grid_params
     )
@@ -175,7 +175,8 @@ def test_parallel_two_processes_does_not_double_runs(sweep_harness: SweepHarness
 
     trial_runs = _assert_parent_and_get_trial_runs(harness=sweep_harness)
 
-    assert 0 < len(trial_runs) < 16
+    # Grid search should produce exactly 8 combinations (2*2*2).
+    assert len(trial_runs) == 8
     _assert_all_combinations_seen(
         trial_runs=trial_runs, keys=["x", "y", "z"], parameters=grid_params
     )
