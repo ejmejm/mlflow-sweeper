@@ -19,6 +19,7 @@ from omegaconf import DictConfig, OmegaConf
 import optuna
 
 from mlflow_sweeper.config import ParamSpec, config_params_to_spec_dict
+from mlflow_sweeper.study import wrap_study
 
 
 logger = logging.getLogger(__name__)
@@ -116,6 +117,8 @@ def init_study(config: DictConfig) -> tuple[optuna.Study, dict[str, ParamSpec]]:
             direction = _optuna_direction(config),
             load_if_exists = True,
         )
+    # Wrap the study to add file locking around ask() calls
+    study = wrap_study(study, config.output_dir)
     return study, param_specs
 
 
