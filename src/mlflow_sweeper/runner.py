@@ -19,6 +19,7 @@ from omegaconf import DictConfig, OmegaConf
 import optuna
 
 from mlflow_sweeper.config import ParamSpec, config_params_to_spec_dict
+from mlflow_sweeper.samplers.grid import GridSampler
 
 
 logger = logging.getLogger(__name__)
@@ -73,7 +74,7 @@ def make_sampler(
     """Create the Optuna sampler for this sweep."""
     if config.algorithm == "grid":
         search_space = {name: spec.to_list() for name, spec in param_specs.items()}
-        return optuna.samplers.GridSampler(search_space)
+        return GridSampler(search_space)
     raise ValueError(f"Invalid sweep algorithm: {config.algorithm}")
 
 
@@ -116,9 +117,6 @@ def init_study(config: DictConfig) -> tuple[optuna.Study, dict[str, ParamSpec]]:
             direction = _optuna_direction(config),
             load_if_exists = True,
         )
-    
-    # TODO: Change study ask function
-        
     return study, param_specs
 
 

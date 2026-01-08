@@ -1,0 +1,12 @@
+experiment: "test-experiment"
+sweep_name: "test-sweep"
+optuna_storage: "sqlite:///output/optuna.db"
+mlflow_storage: "sqlite:///output/mlflow.db"
+command: "python tests/assets/print_sweep_vars.py mlflow_storage=sqlite:///output/mlflow.db"
+algorithm: "grid"
+output_dir: "output"
+
+parameters:
+  x: [0, 1]
+  y: [0, 1]
+  z: [0, 1]

@@ -141,3 +141,4 @@ parameters:
 - [ ] Delete failed runs when being replaced
 - [ ] Implement random sweep from config with run command and parameters
 - [ ] Implement hyperparameter sensitivity from config with run command and parameters
+- [ ] Fix bug where using the `n_jobs` option causes mlflow runs to not be parented properly

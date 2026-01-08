@@ -52,6 +52,13 @@ def _assert_all_combinations_seen(
     assert not missing, f"Missing combinations for {keys}: {sorted(missing)}"
 
 
+def _assert_all_runs_finished(trial_runs: list[mlflow.entities.Run]) -> None:
+    for run in trial_runs:
+        assert run.info.status == "FINISHED", (
+            f"Run {run.info.run_id} has status {run.info.status}, expected FINISHED"
+        )
+
+
 def _assert_parent_and_get_trial_runs(*, harness: SweepHarness) -> list[mlflow.entities.Run]:
     runs = harness.list_mlflow_runs()
     parents = [r for r in runs if "optuna_study_name" in r.data.tags]
@@ -254,6 +261,8 @@ def test_parallel_inprocess_jobs_does_not_double_runs(sweep_harness: SweepHarnes
         trial_runs=trial_runs, keys=["x", "y", "z"], parameters=grid_params
     )
 
+    _assert_all_runs_finished(trial_runs)
+
 
 def test_parallel_two_processes_does_not_double_runs(sweep_harness: SweepHarness) -> None:
     grid_params = {
@@ -313,3 +322,4 @@ def test_parallel_two_processes_does_not_double_runs(sweep_harness: SweepHarness
     _assert_all_combinations_seen(
         trial_runs=trial_runs, keys=["x", "y", "z"], parameters=grid_params
     )
+    _assert_all_runs_finished(trial_runs)
