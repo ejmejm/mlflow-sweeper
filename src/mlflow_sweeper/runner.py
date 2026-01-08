@@ -14,6 +14,7 @@ from typing import Any
 
 from filelock import FileLock
 import mlflow
+from mlflow.entities import RunStatus
 from mlflow.tracking import MlflowClient
 from omegaconf import DictConfig, OmegaConf
 import optuna
@@ -286,9 +287,22 @@ def run_sweep(args: argparse.Namespace, config: DictConfig) -> None:
         param_specs = param_specs,
         mlflow_client = mlflow_client,
     )
-    study.optimize(run_fn, n_trials=args.n_trials, n_jobs=args.n_jobs)
+    
+    # Update the status of the parent MLFlow run based on the status of the Optuna study.
+    try:
+        study.optimize(run_fn, n_trials=args.n_trials, n_jobs=args.n_jobs)
+    except KeyboardInterrupt as e:
+        mlflow.end_run(RunStatus.to_string(RunStatus.KILLED))
+        raise e
+    except Exception as e:
+        mlflow.end_run(RunStatus.to_string(RunStatus.FAILED))
+        raise e
+    finally:
+        if check_study_is_complete(study):
+            mlflow.end_run(RunStatus.to_string(RunStatus.FINISHED))
+        else:
+            mlflow.end_run(RunStatus.to_string(RunStatus.RUNNING))
 
-    mlflow.end_run()
     logger.info("Sweep %s completed.", config.sweep_name)
 
 

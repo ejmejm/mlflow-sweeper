@@ -132,9 +132,9 @@ parameters:
 
 - [x] Implement grid sweep from config with run command and parameters
 - [x] Only have a single parent MLFlow run for all trials even when distributed
-- [ ] Make a sampler that uses a lock to avoid duplicate runs
-- [ ] Change sweep run # that is printed to be the # run in this sweep, not in the whole experiment
-- [ ] Don't mark parent MLFlow run as complete until all trials are done
+- [x] Make a sampler that uses a lock to avoid duplicate runs (still a potential race condition)
+- [x] Change sweep run # that is printed to be the # run in this sweep, not in the whole experiment
+- [x] Don't mark parent MLFlow run as complete until all trials are done
 - [ ] Make sure filelocks are deleted after use
 - [x] Add an option to delete a sweep, and remove it from both MLFlow and Optuna storages
 - [ ] Better handle failed runs, ideally retrying or just overwritting with the same param set
