@@ -154,14 +154,17 @@ def run_experiment(
     active = mlflow.active_run()
     if active is not None:
         logger.debug("Active MLflow run: %s.", active.info.run_id)
+    trial.set_user_attr('mlflow_parent_run_id', active.info.run_id)
 
     trial_run = mlflow.start_run(
         tags = {"sweep_name": str(config.sweep_name)},
         nested = True,
     )
     trial_run_id = trial_run.info.run_id
+    trial.set_user_attr('mlflow_run_id', trial_run_id)
 
     mlflow.log_param("full_command", full_command_str)
+    
 
     environ = os.environ.copy()
     environ["MLFLOW_RUN_ID"] = trial_run_id
@@ -263,11 +266,40 @@ def start_mlflow_parent_run(
 
 
 
-def sync_mlflow_and_optuna(study: optuna.Study, mlflow_client: MlflowClient, parent_run_id: str):
-    """Sync the Optuna study w MLFlow parent run."""
-    # optuna_trials = study.get_trials()
-    # parent_run = mlflow_client.get_run(parent_run_id)
-    pass
+def sync_mlflow_and_optuna(
+    study: optuna.Study,
+    mlflow_client: MlflowClient,
+    config: DictConfig,
+    # parent_run_id: str):
+    ) -> optuna.Study:
+    """Sync the Optuna study with the MLFlow parent run."""
+    
+    # Get all of the valid MLFlow runs for the given experiment.
+    experiment = mlflow_client.get_experiment_by_name(str(config.experiment))
+    if experiment is None:
+        logger.warning("Could not find MLflow experiment: %s.", config.experiment)
+        return
+    mlflow_runs = mlflow_client.search_runs(
+        experiment_ids = [experiment.experiment_id],
+        filter_string = f'tags.sweep_name = "{config.sweep_name}"'
+                        # f'AND tags.mlflow.parentRunId = "{parent_run_id}"',
+    )
+    valid_run_ids = [run.info.run_id for run in mlflow_runs]
+    
+    # Delete any Optuna trials that no longer have a corresponding MLFlow run.
+    # This actually happens by creating a new study and copying over the valid existing trials.
+    optuna_trials = study.get_trials()
+    valid_optuna_trials = []
+    for trial in optuna_trials:
+        if trial.user_attrs.get('mlflow_run_id') in valid_run_ids:
+            valid_optuna_trials.append(trial)
+            
+    optuna.delete_study(study_name=study.study_name, storage=study._storage)
+    new_study, _ = init_study(config)
+    
+    new_study.add_trials(valid_optuna_trials)
+    
+    return new_study
 
 
 def run_sweep(args: argparse.Namespace, config: DictConfig) -> None:
@@ -275,21 +307,23 @@ def run_sweep(args: argparse.Namespace, config: DictConfig) -> None:
     os.makedirs(config.output_dir, exist_ok=True)
 
     study, param_specs = init_study(config)
-    if check_study_is_complete(study):
-        logger.info("Study is complete. No more trials to run.")
-        return
 
-    logger.info("Running sweep: %s/%s", config.experiment, config.sweep_name)
     mlflow.set_tracking_uri(config.mlflow_storage)
     # Protect MLflow database initialization from concurrent access by multiple processes.
     with FileLock(_mlflow_db_lock_path(config)):
         mlflow_client = MlflowClient(tracking_uri=config.mlflow_storage)
         mlflow.set_experiment(str(config.experiment))
-    start_mlflow_parent_run(mlflow_client, config, study.study_name)
+    mlflow_parent_run = start_mlflow_parent_run(mlflow_client, config, study.study_name)
     
-    # This wil delete any Optuna trials that no longer exist in MLFlow.
-    sync_mlflow_and_optuna()
+    # This will delete any Optuna trials that no longer exist in MLFlow.
+    study = sync_mlflow_and_optuna(study, mlflow_client, config) # , mlflow_parent_run.info.run_id)
+    
+    if check_study_is_complete(study):
+        logger.info("Study is complete. No more trials to run.")
+        return
 
+    logger.info("Running sweep: %s/%s", config.experiment, config.sweep_name)
+    
     dict_config = OmegaConf.to_container(config, throw_on_missing=True)
     if isinstance(dict_config, dict):
         # NOTE: mlflow.log_params expects a flat dict; this is kept for backward
