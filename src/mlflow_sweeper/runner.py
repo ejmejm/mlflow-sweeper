@@ -262,6 +262,14 @@ def start_mlflow_parent_run(
         return mlflow.start_run(run_id = run_id)
 
 
+
+def sync_mlflow_and_optuna(study: optuna.Study, mlflow_client: MlflowClient, parent_run_id: str):
+    """Sync the Optuna study w MLFlow parent run."""
+    # optuna_trials = study.get_trials()
+    # parent_run = mlflow_client.get_run(parent_run_id)
+    pass
+
+
 def run_sweep(args: argparse.Namespace, config: DictConfig) -> None:
     """Run a full sweep for a single config."""
     os.makedirs(config.output_dir, exist_ok=True)
@@ -278,6 +286,9 @@ def run_sweep(args: argparse.Namespace, config: DictConfig) -> None:
         mlflow_client = MlflowClient(tracking_uri=config.mlflow_storage)
         mlflow.set_experiment(str(config.experiment))
     start_mlflow_parent_run(mlflow_client, config, study.study_name)
+    
+    # This wil delete any Optuna trials that no longer exist in MLFlow.
+    sync_mlflow_and_optuna()
 
     dict_config = OmegaConf.to_container(config, throw_on_missing=True)
     if isinstance(dict_config, dict):
