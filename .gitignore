@@ -17,6 +17,7 @@ venv/
 ENV/
 env/
 **.history/
+output/
 
 ## Editors / OS
 .DS_Store

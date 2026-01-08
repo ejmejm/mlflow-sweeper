@@ -120,6 +120,13 @@ def init_study(config: DictConfig) -> tuple[optuna.Study, dict[str, ParamSpec]]:
     return study, param_specs
 
 
+def check_study_is_complete(study: optuna.Study) -> bool:
+    """Check if the study is complete."""
+    if isinstance(study.sampler, GridSampler):
+        return study.sampler.is_exhausted(study)
+    raise ValueError(f"Invalid study sampler: {study.sampler}")
+
+
 def get_param_values_for_trial(
     trial: optuna.Trial, param_specs: dict[str, ParamSpec]
 ) -> dict[str, Any]:
@@ -255,6 +262,9 @@ def run_sweep(args: argparse.Namespace, config: DictConfig) -> None:
     os.makedirs(config.output_dir, exist_ok=True)
 
     study, param_specs = init_study(config)
+    if check_study_is_complete(study):
+        logger.info("Study is complete. No more trials to run.")
+        return
 
     logger.info("Running sweep: %s/%s", config.experiment, config.sweep_name)
     mlflow.set_tracking_uri(config.mlflow_storage)
