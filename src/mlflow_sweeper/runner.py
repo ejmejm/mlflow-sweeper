@@ -69,6 +69,10 @@ def get_study_name(config: DictConfig) -> str:
     return f"{config.experiment}/{config.sweep_name}"
 
 
+def get_lock_dir(config: DictConfig) -> str:
+    return os.path.join(config.output_dir, 'locks')
+
+
 def make_sampler(
     config: DictConfig, param_specs: dict[str, ParamSpec]
 ) -> optuna.samplers.BaseSampler:
@@ -84,14 +88,14 @@ def _optuna_study_lock_path(config: DictConfig) -> str:
     study_name = get_study_name(config)
     storage = str(config.optuna_storage)
     lock_id = hashlib.md5(f"{study_name}:{storage}".encode("utf-8")).hexdigest()
-    return os.path.join(config.output_dir, f"study_{lock_id}.lock")
+    return os.path.join(get_lock_dir(config), f"study_{lock_id}.lock")
 
 
 def _mlflow_db_lock_path(config: DictConfig) -> str:
     """File lock path used to guard MLflow database initialization."""
     storage = str(config.mlflow_storage)
     lock_id = hashlib.md5(storage.encode("utf-8")).hexdigest()
-    return os.path.join(config.output_dir, f"mlflow_db_{lock_id}.lock")
+    return os.path.join(get_lock_dir(config), f"mlflow_db_{lock_id}.lock")
 
 
 def _optuna_direction(config: DictConfig) -> str:
@@ -227,7 +231,7 @@ def start_mlflow_parent_run(
     lock_id = hashlib.md5(
         f"{config.mlflow_storage}:{optuna_study_name}".encode("utf-8")
     ).hexdigest()
-    lock_path = os.path.join(config.output_dir, f"mlflow_sweep_parent_{lock_id}.lock")
+    lock_path = os.path.join(get_lock_dir(config), f"mlflow_sweep_parent_{lock_id}.lock")
 
     with FileLock(lock_path):
         runs = mlflow.search_runs(
