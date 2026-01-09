@@ -8,6 +8,11 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+class DuplicateTrialError(Exception):
+    """Raised when a duplicate trial is attempted in GridSampler."""
+    pass
+
+
 class GridSampler(BaseGridSampler):
     """Version of the GridSampler that does not run duplicate trials."""
     
@@ -33,9 +38,14 @@ class GridSampler(BaseGridSampler):
                 "exhausted. This may happen due to a timing issue during distributed optimization "
                 "or when re-running optimizations on already finished studies."
             )
-
-            # One of all grids is randomly picked up in this case.
-            target_grids = list(range(len(self._all_grids)))
+            
+            raise DuplicateTrialError(
+                "All parameter combinations in the grid have already been explored; "
+                "no unvisited grid points remain for GridSampler."
+            )
+            
+        if len(target_grids) == 1:
+            study.stop()
 
         # In distributed optimization, multiple workers may simultaneously pick up the same grid.
         # To make the conflict less frequent, the grid is chosen randomly.

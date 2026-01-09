@@ -32,6 +32,7 @@ optuna.db
 *.db-journal
 *.sqlite
 *.sqlite3
+*.lock
 
 ## Local sweep outputs (often configured as ./sweeps)
 sweeps/

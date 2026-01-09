@@ -154,7 +154,6 @@ def run_experiment(
     active = mlflow.active_run()
     if active is not None:
         logger.debug("Active MLflow run: %s.", active.info.run_id)
-    trial.set_user_attr('mlflow_parent_run_id', active.info.run_id)
 
     trial_run = mlflow.start_run(
         tags = {"sweep_name": str(config.sweep_name)},
