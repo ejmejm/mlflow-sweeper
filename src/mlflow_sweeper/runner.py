@@ -270,7 +270,6 @@ def sync_mlflow_and_optuna(
     study: optuna.Study,
     mlflow_client: MlflowClient,
     config: DictConfig,
-    # parent_run_id: str):
     ) -> optuna.Study:
     """Sync the Optuna study with the MLFlow parent run."""
     
@@ -281,8 +280,7 @@ def sync_mlflow_and_optuna(
         return
     mlflow_runs = mlflow_client.search_runs(
         experiment_ids = [experiment.experiment_id],
-        filter_string = f'tags.sweep_name = "{config.sweep_name}"'
-                        # f'AND tags.mlflow.parentRunId = "{parent_run_id}"',
+        filter_string = f'tags.sweep_name = "{config.sweep_name}"',
     )
     valid_run_ids = [run.info.run_id for run in mlflow_runs]
     
@@ -313,10 +311,9 @@ def run_sweep(args: argparse.Namespace, config: DictConfig) -> None:
     with FileLock(_mlflow_db_lock_path(config)):
         mlflow_client = MlflowClient(tracking_uri=config.mlflow_storage)
         mlflow.set_experiment(str(config.experiment))
-    mlflow_parent_run = start_mlflow_parent_run(mlflow_client, config, study.study_name)
     
     # This will delete any Optuna trials that no longer exist in MLFlow.
-    study = sync_mlflow_and_optuna(study, mlflow_client, config) # , mlflow_parent_run.info.run_id)
+    study = sync_mlflow_and_optuna(study, mlflow_client, config)
     
     if check_study_is_complete(study):
         logger.info("Study is complete. No more trials to run.")

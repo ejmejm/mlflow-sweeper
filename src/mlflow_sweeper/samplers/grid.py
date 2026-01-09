@@ -1,10 +1,49 @@
 from optuna import Study
 from optuna.samplers import GridSampler as BaseGridSampler
-from optuna.trial import TrialState
+from optuna.trial import FrozenTrial, TrialState
+
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 
 class GridSampler(BaseGridSampler):
     """Version of the GridSampler that does not run duplicate trials."""
+    
+    def before_trial(self, study: Study, trial: FrozenTrial) -> None:
+        # Instead of returning param values, GridSampler puts the target grid id as a system attr,
+        # and the values are returned from `sample_independent`. This is because the distribution
+        # object is hard to get at the beginning of trial, while we need the access to the object
+        # to validate the sampled value.
+
+        # When the trial is created by RetryFailedTrialCallback or enqueue_trial, we should not
+        # assign a new grid_id.
+        if "grid_id" in trial.system_attrs or "fixed_params" in trial.system_attrs:
+            return
+
+        target_grids = self._get_unvisited_grid_ids(study)
+
+        if len(target_grids) == 0:
+            # This case may occur with distributed optimization or trial queue. If there is no
+            # target grid, `GridSampler` evaluates a visited, duplicated point with the current
+            # trial. After that, the optimization stops.
+            logger.warning(
+                "`GridSampler` is re-evaluating a configuration because the grid has been "
+                "exhausted. This may happen due to a timing issue during distributed optimization "
+                "or when re-running optimizations on already finished studies."
+            )
+
+            # One of all grids is randomly picked up in this case.
+            target_grids = list(range(len(self._all_grids)))
+
+        # In distributed optimization, multiple workers may simultaneously pick up the same grid.
+        # To make the conflict less frequent, the grid is chosen randomly.
+        grid_id = int(self._rng.rng.choice(target_grids))
+
+        study._storage.set_trial_system_attr(trial._trial_id, "search_space", self._search_space)
+        study._storage.set_trial_system_attr(trial._trial_id, "grid_id", grid_id)
+    
     
     def _get_unvisited_grid_ids(self, study: Study) -> list[int]:
         # List up unvisited grids based on already finished ones.
