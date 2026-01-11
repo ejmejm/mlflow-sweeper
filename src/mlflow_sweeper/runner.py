@@ -62,6 +62,11 @@ def parse_args() -> argparse.Namespace:
         action = "store_true",
         help = "Delete all data associated with the MLflow sweep and Optuna study.",
     )
+    parser.add_argument(
+        "--abort_on_fail",
+        action = "store_true",
+        help = "Terminate the sweep if an error occurs in any trial.",
+    )
     return parser.parse_args()
 
 
@@ -145,6 +150,7 @@ def run_experiment(
     config: DictConfig,
     param_specs: dict[str, ParamSpec],
     mlflow_client: MlflowClient,
+    args: argparse.Namespace,
 ) -> float:
     """Run a single trial as a subprocess and log it under MLflow."""
     param_values = get_param_values_for_trial(trial, param_specs)
@@ -164,6 +170,7 @@ def run_experiment(
     trial.set_user_attr('mlflow_run_id', trial_run_id)
 
     mlflow.log_param("full_command", full_command_str)
+    mlflow.log_params(param_values)
     
     environ = os.environ.copy()
     environ["MLFLOW_RUN_ID"] = trial_run_id
@@ -175,6 +182,7 @@ def run_experiment(
 
     proc: subprocess.Popen[str] | None = None
     try:
+        state = RunStatus.FAILED
         proc = subprocess.Popen(
             command_list,
             env = environ,
@@ -191,11 +199,14 @@ def run_experiment(
                 print(f"{faded}{line}{reset}", end="")
 
         proc.wait()
-        if proc.returncode != 0:
+        if proc.returncode != 0 and args.abort_on_fail:
             raise RuntimeError(
-                f"Trial run {trial_run_id} failed with exit code {proc.returncode}!"
-            )
+                f"Trial run {trial_run_id} failed with exit code {proc.returncode}!")
+        elif proc.returncode == 0:
+            state = RunStatus.FINISHED
+    
     except KeyboardInterrupt:
+        state = RunStatus.KILLED
         if proc is not None:
             proc.send_signal(signal.SIGINT)
 
@@ -208,8 +219,9 @@ def run_experiment(
             if proc.returncode is None:
                 proc.kill()
         raise
+
     finally:
-        mlflow.end_run()
+        mlflow.end_run(RunStatus.to_string(state))
 
     assert proc is not None
     logger.info("Trial run %s finished with exit code %s.", trial_run_id, proc.returncode)
@@ -332,6 +344,7 @@ def run_sweep(args: argparse.Namespace, config: DictConfig) -> None:
         config = config,
         param_specs = param_specs,
         mlflow_client = mlflow_client,
+        args = args,
     )
     
     # Update the status of the parent MLFlow run based on the status of the Optuna study.
