@@ -263,8 +263,8 @@ def sync_mlflow_and_optuna(
     study: optuna.Study,
     mlflow_client: MlflowClient,
     config: SweepConfig,
-) -> optuna.Study:
-    """Sync the Optuna study with the MLFlow parent run, deleting any Optuna trials that no longer have a corresponding MLFlow run."""
+) -> None:
+    """Sync the Optuna study with the MLFlow parent run, voiding any Optuna trials that no longer have a corresponding MLFlow run."""
     
     # Get all of the valid MLFlow runs for the given experiment.
     experiment = mlflow_client.get_experiment_by_name(config.experiment)
@@ -277,20 +277,16 @@ def sync_mlflow_and_optuna(
     )
     valid_run_ids = [run.info.run_id for run in mlflow_runs]
     
-    # Delete any Optuna trials that no longer have a corresponding MLFlow run.
-    # This actually happens by creating a new study and copying over the valid existing trials.
-    optuna_trials = study.get_trials()
-    valid_optuna_trials = []
-    for trial in optuna_trials:
-        if trial.user_attrs.get('mlflow_run_id') in valid_run_ids:
-            valid_optuna_trials.append(trial)
-            
-    optuna.delete_study(study_name=study.study_name, storage=study._storage)
-    new_study = init_study(config)
-    
-    new_study.add_trials(valid_optuna_trials)
-    
-    return new_study
+    # Void any Optuna trials that no longer have a corresponding MLFlow run.
+    # Optuna doesn't provide a method to directly delete them, and deleting and recreating the whole study
+    # could cause problems if other processes are accessing the study.
+    with FileLock(_optuna_study_lock_path(config)):
+        voided_trial_ids = study._storage.get_study_user_attrs(study._study_id).get('voided_trial_ids', [])
+        optuna_trials = study.get_trials()
+        for trial in optuna_trials:
+            if trial.user_attrs.get('mlflow_run_id') not in valid_run_ids and trial._trial_id not in voided_trial_ids:
+                voided_trial_ids.append(trial._trial_id)
+        study._storage.set_study_user_attr(study._study_id, 'voided_trial_ids', voided_trial_ids)
 
 
 def run_sweep(args: argparse.Namespace, config: SweepConfig) -> None:
@@ -307,7 +303,7 @@ def run_sweep(args: argparse.Namespace, config: SweepConfig) -> None:
         start_mlflow_parent_run(mlflow_client, config, study.study_name)
     
     # This will delete any Optuna trials that no longer exist in MLFlow.
-    study = sync_mlflow_and_optuna(study, mlflow_client, config)
+    sync_mlflow_and_optuna(study, mlflow_client, config)
     
     if check_study_is_complete(study):
         logger.info("Study is complete. No more trials to run.")

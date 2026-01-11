@@ -8,6 +8,9 @@ from optuna.trial import FrozenTrial, TrialState
 from mlflow_sweeper.optimize import PREEMPTED_KEY, PREEMPTION_REASON_KEY, PREEMPTION_REASON_NO_MORE_TRIALS
 
 
+RETRY_COUNT_KEY = "retry_count"
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -53,11 +56,13 @@ class GridSampler(BaseGridSampler):
         # since some pruners such as `HyperbandPruner` use the study transformed
         # to filter trials. See https://github.com/optuna/optuna/issues/2327 for details.
         trials = study._storage.get_all_trials(study._study_id, deepcopy=False)
+        voided_trial_ids = study._storage.get_study_user_attrs(study._study_id).get('voided_trial_ids', [])
 
         for t in trials:
-            if "grid_id" in t.system_attrs and self._same_search_space(
-                t.system_attrs["search_space"]
-            ):
+            not_voided = t._trial_id not in voided_trial_ids
+            has_grid_id = "grid_id" in t.system_attrs
+            
+            if not_voided and has_grid_id and self._same_search_space(t.system_attrs.get("search_space", {})):
                 if t.state.is_finished():
                     visited_grids.append(t.system_attrs["grid_id"])
                 elif t.state == TrialState.RUNNING:
