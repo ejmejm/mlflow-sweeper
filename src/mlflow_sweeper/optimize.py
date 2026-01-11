@@ -31,8 +31,18 @@ if TYPE_CHECKING:
     from typing import Any
 
     from optuna.trial import FrozenTrial
+    from optuna.trial import Trial
 
 _logger = logging.get_logger(__name__)
+
+
+PREEMPTED_KEY = 'preempted'
+PREEMPTION_REASON_KEY = 'preemption_reason'
+PREEMPTION_REASON_NO_MORE_TRIALS = 'no_more_trials'
+
+
+def was_preempted(trial: Trial | FrozenTrial) -> bool:
+    return trial.user_attrs.get(PREEMPTED_KEY, False)
 
 
 def optimize_study(
@@ -169,9 +179,17 @@ def _optimize_sequential(
             # https://github.com/optuna/optuna/pull/325.
             if gc_after_trial:
                 gc.collect()
+        
+        frozen_trial = study._storage.get_trial(frozen_trial_id)
+            
+        # If the study was preempted because there are no more trials to run, this optimization thread should stop.
+        # If it was preempted for any other reason, it should just skip making updates based on this trial and continue.
+        if was_preempted(frozen_trial):
+            if frozen_trial.user_attrs.get(PREEMPTION_REASON_KEY) == PREEMPTION_REASON_NO_MORE_TRIALS:
+                study.stop()
+            continue
 
         if callbacks is not None:
-            frozen_trial = study._storage.get_trial(frozen_trial_id)
             for callback in callbacks:
                 callback(study, copy.deepcopy(frozen_trial))
 
@@ -194,6 +212,12 @@ def _run_trial(
             optuna.storages.fail_stale_trials(study)
 
     trial = study.ask()
+    
+    # Get the frozen trial because the trial object will not have recieved user attribute updates.
+    frozen_trial = study._storage.get_trial(trial._trial_id)
+    if was_preempted(frozen_trial):
+        study._storage.set_trial_state_values(trial._trial_id, TrialState.PRUNED)
+        return trial._trial_id
 
     state: TrialState | None = None
     value_or_values: float | Sequence[float] | None = None

@@ -1,8 +1,11 @@
+import logging
+
+from filelock import FileLock
 from optuna import Study
 from optuna.samplers import GridSampler as BaseGridSampler
 from optuna.trial import FrozenTrial, TrialState
 
-import logging
+from mlflow_sweeper.optimize import PREEMPTED_KEY, PREEMPTION_REASON_KEY, PREEMPTION_REASON_NO_MORE_TRIALS
 
 
 logger = logging.getLogger(__name__)
@@ -22,30 +25,23 @@ class GridSampler(BaseGridSampler):
         if "grid_id" in trial.system_attrs or "fixed_params" in trial.system_attrs:
             return
 
-        target_grids = self._get_unvisited_grid_ids(study)
+        # TODO: Change this file lock to a better location or a database lock.
+        with FileLock(f"output/{study.study_name}.lock"):
+            target_grids = self._get_unvisited_grid_ids(study)
 
-        if len(target_grids) == 0:
-            # This case may occur with distributed optimization or trial queue. If there is no
-            # target grid, `GridSampler` evaluates a visited, duplicated point with the current
-            # trial. After that, the optimization stops.
-            logger.warning(
-                "`GridSampler` is re-evaluating a configuration because the grid has been "
-                "exhausted. This may happen due to a timing issue during distributed optimization "
-                "or when re-running optimizations on already finished studies."
-            )
+            if len(target_grids) == 0:
+                # This case may occur with distributed optimization or trial queue. If there is no
+                # target grid, `GridSampler` will preempt the trial and set a flag to stop the study.
+                study._storage.set_trial_user_attr(trial._trial_id, PREEMPTED_KEY, True)
+                study._storage.set_trial_user_attr(trial._trial_id, PREEMPTION_REASON_KEY, PREEMPTION_REASON_NO_MORE_TRIALS)
+                return
 
-            # One of all grids is randomly picked up in this case.
-            target_grids = list(range(len(self._all_grids)))
-        
-        if len(target_grids) == 1:
-            study.stop()
+            # In distributed optimization, multiple workers may simultaneously pick up the same grid.
+            # To make the conflict less frequent, the grid is chosen randomly.
+            grid_id = int(self._rng.rng.choice(target_grids))
 
-        # In distributed optimization, multiple workers may simultaneously pick up the same grid.
-        # To make the conflict less frequent, the grid is chosen randomly.
-        grid_id = int(self._rng.rng.choice(target_grids))
-
-        study._storage.set_trial_system_attr(trial._trial_id, "search_space", self._search_space)
-        study._storage.set_trial_system_attr(trial._trial_id, "grid_id", grid_id)
+            study._storage.set_trial_system_attr(trial._trial_id, "search_space", self._search_space)
+            study._storage.set_trial_system_attr(trial._trial_id, "grid_id", grid_id)
     
     
     def _get_unvisited_grid_ids(self, study: Study) -> list[int]:
