@@ -77,9 +77,9 @@ class SweepHarness:
         if experiment is None:
             return []
         return client.search_runs(
-            experiment_ids=[experiment.experiment_id],
-            filter_string=f'tags.sweep_name = "{self.sweep_name}"',
-            run_view_type=mlflow.entities.ViewType.ACTIVE_ONLY,
+            experiment_ids = [experiment.experiment_id],
+            filter_string = f'tags.sweep_name = "{self.sweep_name}"',
+            run_view_type = mlflow.entities.ViewType.ACTIVE_ONLY,
         )
 
     def get_parent_run_id(self) -> str | None:
@@ -116,14 +116,14 @@ def sweep_harness() -> Iterator[SweepHarness]:
     mlflow_storage = f"sqlite:///{mlflow_db}"
 
     harness = SweepHarness(
-        repo_root=repo_root,
-        root_dir=root_dir,
-        output_dir=output_dir,
-        optuna_storage=optuna_storage,
-        mlflow_storage=mlflow_storage,
-        assets_dir=os.path.join(repo_root, "tests", "assets"),
-        experiment=f"test-exp-{uuid.uuid4().hex}",
-        sweep_name=f"test-sweep-{uuid.uuid4().hex}",
+        repo_root = repo_root,
+        root_dir = root_dir,
+        output_dir = output_dir,
+        optuna_storage = optuna_storage,
+        mlflow_storage = mlflow_storage,
+        assets_dir = os.path.join(repo_root, "tests", "assets"),
+        experiment = f"test-exp-{uuid.uuid4().hex}",
+        sweep_name = f"test-sweep-{uuid.uuid4().hex}",
     )
     try:
         yield harness

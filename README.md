@@ -137,7 +137,7 @@ parameters:
 - [x] Don't mark parent MLFlow run as complete until all trials are done
 - [x] Add an option to delete a sweep, and remove it from both MLFlow and Optuna storages
 - [x] Fix bug with deleted MLFlow runs leading to duplicate Optuna trials
-- [ ] Better handle failed runs, ideally retrying or just overwritting with the same param set
+- [ ] Better handle failed runs, ideally retrying or just overwritting with the same param set (just hold counter for unique trials rather than binary is combination done in sampler)
 - [ ] Delete failed runs when being replaced
 - [ ] Implement random sweep from config with run command and parameters
 - [ ] Implement hyperparameter sensitivity from config with run command and parameters

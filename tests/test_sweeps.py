@@ -194,7 +194,7 @@ def test_grid_runs_all_4_combinations(sweep_harness: SweepHarness) -> None:
         }
     )
 
-    sweep_harness.run_cli(config_path, "-n", "100", "-j", "1")
+    sweep_harness.run_cli(config_path)
 
     trial_runs = _assert_parent_and_get_trial_runs(harness=sweep_harness)
     assert len(trial_runs) == 4
