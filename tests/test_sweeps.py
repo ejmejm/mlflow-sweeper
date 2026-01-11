@@ -185,14 +185,7 @@ def test_grid_runs_all_4_combinations(sweep_harness: SweepHarness) -> None:
         "color": ["red", "blue"],
         "shape": ["square", "circle"],
     }
-    config_path = sweep_harness.write_config(
-        parameters={
-            **grid_params,
-            # Passed through to the subprocess script to satisfy the required MLflow init.
-            "mlflow_storage": sweep_harness.mlflow_storage,
-            "project": sweep_harness.experiment,
-        }
-    )
+    config_path = sweep_harness.write_config(parameters=grid_params)
 
     sweep_harness.run_cli(config_path)
 
@@ -206,11 +199,9 @@ def test_grid_runs_all_4_combinations(sweep_harness: SweepHarness) -> None:
 
 def test_delete_sweep_removes_optuna_and_mlflow_runs(sweep_harness: SweepHarness) -> None:
     config_path = sweep_harness.write_config(
-        parameters={
+        parameters = {
             "a": ["0", "1"],
             "b": ["x", "y"],
-            "mlflow_storage": sweep_harness.mlflow_storage,
-            "project": sweep_harness.experiment,
         }
     )
 
@@ -243,13 +234,7 @@ def test_parallel_inprocess_jobs_does_not_double_runs(sweep_harness: SweepHarnes
         "y": ["0", "1"],
         "z": ["0", "1"],  # 2*2*2 = 8 combos
     }
-    config_path = sweep_harness.write_config(
-        parameters={
-            **grid_params,
-            "mlflow_storage": sweep_harness.mlflow_storage,
-            "project": sweep_harness.experiment,
-        }
-    )
+    config_path = sweep_harness.write_config(parameters=grid_params)
 
     sweep_harness.run_cli(config_path, "-n", "100", "-j", "4")
 
@@ -270,13 +255,7 @@ def test_parallel_two_processes_does_not_double_runs(sweep_harness: SweepHarness
         "y": ["0", "1"],
         "z": ["0", "1"],  # 2*2*2 = 8 combos
     }
-    config_path = sweep_harness.write_config(
-        parameters={
-            **grid_params,
-            "mlflow_storage": sweep_harness.mlflow_storage,
-            "project": sweep_harness.experiment,
-        }
-    )
+    config_path = sweep_harness.write_config(parameters=grid_params)
 
     cmd = [
         sys.executable,

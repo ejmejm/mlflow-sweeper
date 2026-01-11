@@ -165,9 +165,9 @@ def run_experiment(
 
     mlflow.log_param("full_command", full_command_str)
     
-
     environ = os.environ.copy()
     environ["MLFLOW_RUN_ID"] = trial_run_id
+    environ["MLFLOW_TRACKING_URI"] = str(config.mlflow_storage)
 
     logger.info("Sweep run #%s.", trial.number)
     logger.info("Created trial MLflow run: %s.", trial_run_id)

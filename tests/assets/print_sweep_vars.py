@@ -48,8 +48,8 @@ def main() -> None:
     for key, value in params.items():
         print(f"{key}={value}")
 
-    project = str(config.get("project", "test-project"))
-    mlflow_storage = config.get("mlflow_storage")
+    project = str(config.get("project", "default-project"))
+    mlflow_storage = os.environ.get("MLFLOW_TRACKING_URI")
     if mlflow_storage is None:
         raise ValueError("Expected `mlflow_storage` to be provided to the subprocess.")
 
