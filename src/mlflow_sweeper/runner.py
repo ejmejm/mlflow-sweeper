@@ -18,6 +18,7 @@ from mlflow.entities import RunStatus
 from mlflow.tracking import MlflowClient
 from omegaconf import DictConfig, OmegaConf
 import optuna
+from optuna.study import StudyDirection
 
 from mlflow_sweeper.config import ParamSpec, config_params_to_spec_dict
 from mlflow_sweeper.samplers.grid import GridSampler
@@ -104,15 +105,21 @@ def _mlflow_db_lock_path(config: DictConfig) -> str:
     return os.path.join(get_lock_dir(config), f"mlflow_db_{lock_id}.lock")
 
 
-def _optuna_direction(config: DictConfig) -> str:
+def _optuna_direction(config: DictConfig) -> StudyDirection:
     """Optuna optimization direction for the study."""
     if "spec" not in config:
-        return "minimize"
+        return optuna.study.StudyDirection.NOT_SET
     if "direction" not in config.spec:
-        return "minimize"
-    if config.spec.direction is None:
-        return "minimize"
-    return str(config.spec.direction)
+        return StudyDirection.NOT_SET
+    
+    if config.spec.direction.lower() == "minimize":
+        return StudyDirection.MINIMIZE
+    elif config.spec.direction.lower() == "maximize":
+        return StudyDirection.MAXIMIZE
+    elif config.spec.direction is None:
+        return StudyDirection.NOT_SET
+    else:
+        raise ValueError(f"Invalid optimization direction: {config.spec.direction}")
 
 
 def init_study(config: DictConfig) -> tuple[optuna.Study, dict[str, ParamSpec]]:
