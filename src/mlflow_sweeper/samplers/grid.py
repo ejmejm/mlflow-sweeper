@@ -36,6 +36,9 @@ class GridSampler(BaseGridSampler):
 
             # One of all grids is randomly picked up in this case.
             target_grids = list(range(len(self._all_grids)))
+        
+        if len(target_grids) == 1:
+            study.stop()
 
         # In distributed optimization, multiple workers may simultaneously pick up the same grid.
         # To make the conflict less frequent, the grid is chosen randomly.
