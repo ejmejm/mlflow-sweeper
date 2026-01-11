@@ -27,6 +27,34 @@ from mlflow_sweeper.optimize import optimize_study
 logger = logging.getLogger(__name__)
 
 
+class TrialRunError(Exception):
+    """Exception raised when a trial run fails."""
+    pass
+
+
+class TrialRunAbortError(Exception):
+    """Exception raised when a trial run fails."""
+    pass
+
+
+def extract_error_trace(output_lines: list[str]) -> str:
+    """Extract the Python error traceback from subprocess output lines.
+    
+    Searches for the standard Python traceback header and returns all lines
+    from that point to the end of the output.
+    
+    Args:
+        output_lines: List of output lines from the subprocess.
+        
+    Returns:
+        The extracted error traceback, or a message indicating none was found.
+    """
+    for i, line in enumerate(output_lines):
+        if line.startswith("Traceback (most recent call last):"):
+            return "".join(output_lines[i:]).rstrip()
+    return "(no error trace detected)"
+
+
 def parse_args() -> argparse.Namespace:
     """Parse CLI args for the sweep runner."""
     parser = argparse.ArgumentParser()
@@ -63,9 +91,10 @@ def parse_args() -> argparse.Namespace:
         help = "Delete all data associated with the MLflow sweep and Optuna study.",
     )
     parser.add_argument(
-        "--abort_on_fail",
+        "--abort-on-fail",
         action = "store_true",
         help = "Terminate the sweep if an error occurs in any trial.",
+        default = False,
     )
     return parser.parse_args()
 
@@ -165,7 +194,7 @@ def run_experiment(
 
     proc: subprocess.Popen[str] | None = None
     try:
-        state = RunStatus.FAILED
+        state = RunStatus.FINISHED
         proc = subprocess.Popen(
             command_list,
             env = environ,
@@ -177,16 +206,26 @@ def run_experiment(
 
         faded = "\033[2;37m"  # dim grey
         reset = "\033[0m"
+        output_lines: list[str] = []
         if proc.stdout is not None:
             for line in proc.stdout:
+                output_lines.append(line)
                 print(f"{faded}{line}{reset}", end="")
 
         proc.wait()
-        if proc.returncode != 0 and args.abort_on_fail:
-            raise RuntimeError(
-                f"Trial run {trial_run_id} failed with exit code {proc.returncode}!")
-        elif proc.returncode == 0:
-            state = RunStatus.FINISHED
+        logger.info(f"Trial run {trial_run_id} finished with exit code {proc.returncode}.")
+        
+        if proc.returncode != 0:
+            state = RunStatus.FAILED
+            error_trace = extract_error_trace(output_lines)
+            error_msg = (
+                f"Trial run {trial_run_id} failed with exit code {proc.returncode}!\n\n"
+                f"{error_trace}"
+            )
+            if args.abort_on_fail:
+                raise TrialRunAbortError(error_msg)
+            else:
+                raise TrialRunError(error_msg)
     
     except KeyboardInterrupt:
         state = RunStatus.KILLED
@@ -206,12 +245,9 @@ def run_experiment(
     finally:
         mlflow.end_run(RunStatus.to_string(state))
 
-    assert proc is not None
-    logger.info("Trial run %s finished with exit code %s.", trial_run_id, proc.returncode)
-
     if config.spec.metric is None:
         return 0.0
-
+    
     trial_run = mlflow_client.get_run(trial_run_id)
     summary_metrics = trial_run.data.metrics
     if config.spec.metric not in summary_metrics:
@@ -324,7 +360,7 @@ def run_sweep(args: argparse.Namespace, config: SweepConfig) -> None:
     
     # Update the status of the parent MLFlow run based on the status of the Optuna study.
     try:
-        optimize_study(study, run_fn, n_trials=args.n_trials, n_jobs=args.n_jobs)
+        optimize_study(study, run_fn, n_trials=args.n_trials, n_jobs=args.n_jobs, catch=(TrialRunError,))
     except KeyboardInterrupt as e:
         mlflow.end_run(RunStatus.to_string(RunStatus.KILLED))
         raise e
