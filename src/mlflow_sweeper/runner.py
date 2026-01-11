@@ -112,7 +112,7 @@ def make_sampler(config: SweepConfig) -> optuna.samplers.BaseSampler:
     """Create the Optuna sampler for this sweep."""
     if config.algorithm == "grid":
         search_space = {name: spec.to_list() for name, spec in config.param_specs.items()}
-        return GridSampler(search_space)
+        return GridSampler(search_space, max_retry_count=config.spec.max_retry)
     raise ValueError(f"Invalid sweep algorithm: {config.algorithm}")
 
 
