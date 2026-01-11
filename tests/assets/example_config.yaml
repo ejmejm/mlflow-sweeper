@@ -1,10 +1,17 @@
 experiment: "test-experiment"
 sweep_name: "test-sweep"
+command: "python tests/assets/print_sweep_vars.py"
+
+# Storage
 optuna_storage: "sqlite:///output/optuna.db"
 mlflow_storage: "sqlite:///output/mlflow.db"
-command: "python tests/assets/print_sweep_vars.py"
-algorithm: "grid"
 output_dir: "output"
+
+# Optimizer
+algorithm: "grid"
+spec:
+  max_retry: 3
+  direction: null
 
 parameters:
   x: [0, 1]

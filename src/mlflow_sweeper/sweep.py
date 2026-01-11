@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 
-from mlflow_sweeper.config import load_configs, validate_config
+from mlflow_sweeper.config import load_configs, SweepConfig
 from mlflow_sweeper.runner import delete_sweep, parse_args, run_sweep
 
 
@@ -47,19 +47,21 @@ def main() -> None:
 
     args = parse_args()
 
-    configs = load_configs(args.config)
+    dict_configs = load_configs(args.config)
+    
+    # Convert and validate all configs upfront.
+    sweep_configs: list[SweepConfig] = []
+    for config_path, dict_config in zip(args.config, dict_configs, strict=True):
+        logger.info(f"Validating config: {config_path}")
+        sweep_configs.append(SweepConfig.from_dict_config(dict_config))
 
     if args.delete:
-        for config in configs:
+        for config in sweep_configs:
             logger.info("Deleting sweep: %s/%s...", config.experiment, config.sweep_name)
             delete_sweep(config)
         return
 
-    for config_path, config in zip(args.config, configs, strict=True):
-        logger.info("Validating config: %s", config_path)
-        validate_config(config)
-
-    for config in configs:
+    for config in sweep_configs:
         run_sweep(args, config)
 
 

@@ -14,6 +14,7 @@ from typing import Any
 import numpy as np
 from omegaconf import DictConfig, OmegaConf
 import optuna
+from optuna.study import StudyDirection
 
 
 CONFIG_REQUIRED_FIELDS = [
@@ -28,25 +29,163 @@ CONFIG_REQUIRED_FIELDS = [
 ]
 VALID_ALGORITHMS = ["grid"]
 
+
 def load_configs(config_paths: list[str]) -> list[DictConfig]:
     """Load sweep configs from one or more YAML/JSON paths."""
     return [OmegaConf.load(path) for path in config_paths]
 
 
 def validate_config(config: DictConfig) -> None:
-    """Validate required config fields and basic constraints."""
-    for field in CONFIG_REQUIRED_FIELDS:
-        assert field in config, f"'{field}' field is required in the config!"
+    """Validate required config fields and basic constraints.
 
-    assert (
-        config.algorithm in VALID_ALGORITHMS
-    ), f"'algorithm' must be one of {VALID_ALGORITHMS}!"
+    Args:
+        config: A DictConfig loaded from a YAML/JSON file.
 
+    Raises:
+        ValueError: If required fields are missing or values are invalid.
+    """
+    # Check required fields
+    missing = [f for f in CONFIG_REQUIRED_FIELDS if f not in config]
+    if missing:
+        raise ValueError(f"Required fields missing from config: {missing}")
+
+    # Validate algorithm
+    if config.algorithm not in VALID_ALGORITHMS:
+        raise ValueError(f"'algorithm' must be one of {VALID_ALGORITHMS}!")
+
+    # Validate direction if present
     if "spec" in config and "direction" in config.spec:
-        assert config.spec.direction in [
-            "minimize",
-            "maximize",
-        ], "'direction' must be one of ['minimize', 'maximize']!"
+        if config.spec.direction not in ["minimize", "maximize", None]:
+            raise ValueError("'direction' must be one of ['minimize', 'maximize', None]!")
+
+
+def _parse_direction(direction_str: str | None) -> StudyDirection:
+    """Parse a direction string into a StudyDirection.
+
+    Args:
+        direction_str: The direction string from config ('minimize', 'maximize', or None).
+
+    Returns:
+        The corresponding StudyDirection.
+
+    Raises:
+        ValueError: If the direction value is invalid.
+    """
+    if direction_str is None:
+        return StudyDirection.MINIMIZE
+    elif direction_str.lower() == "minimize":
+        return StudyDirection.MINIMIZE
+    elif direction_str.lower() == "maximize":
+        return StudyDirection.MAXIMIZE
+    else:
+        raise ValueError(f"Invalid optimization direction: {direction_str}")
+
+
+def optuna_direction(config: DictConfig) -> StudyDirection:
+    """Get Optuna optimization direction from config.
+
+    Args:
+        config: A DictConfig loaded from a YAML/JSON file.
+
+    Returns:
+        The StudyDirection for the optimization.
+
+    Raises:
+        ValueError: If the direction value is invalid.
+    """
+    if "spec" not in config or "direction" not in config.spec:
+        return StudyDirection.NOT_SET
+    return _parse_direction(config.spec.direction)
+
+
+@dataclass
+class SpecConfig:
+    """Parsed spec configuration for sweep optimization."""
+
+    direction: StudyDirection = StudyDirection.MINIMIZE
+    max_retry: int = 3
+    metric: str | None = None
+
+    @classmethod
+    def from_dict_config(cls, spec: DictConfig | None) -> "SpecConfig":
+        """Create a SpecConfig from the spec section of a config.
+
+        Args:
+            spec: The spec section of a DictConfig, or None if not present.
+
+        Returns:
+            A SpecConfig instance with parsed values.
+        """
+        if spec is None:
+            return cls()
+
+        kwargs: dict[str, Any] = {}
+
+        if "direction" in spec:
+            kwargs["direction"] = _parse_direction(spec.direction)
+
+        if "max_retry" in spec:
+            kwargs["max_retry"] = spec.max_retry
+
+        if "metric" in spec:
+            kwargs["metric"] = spec.metric
+
+        return cls(**kwargs)
+
+
+@dataclass
+class SweepConfig:
+    """Parsed and validated sweep configuration."""
+
+    # Required fields
+    experiment: str
+    sweep_name: str
+    command: str
+    optuna_storage: str
+    mlflow_storage: str
+    algorithm: str
+    parameters: dict[str, Any]
+    param_specs: dict[str, ParamSpec]
+    spec: SpecConfig
+
+    # Optional spec (contains direction, max_retry, metric)
+    output_dir: str = "output"
+
+    @classmethod
+    def from_dict_config(cls, config: DictConfig) -> "SweepConfig":
+        """Create a SweepConfig from a DictConfig.
+
+        Args:
+            config: A DictConfig loaded from a YAML/JSON file.
+
+        Returns:
+            A validated SweepConfig instance.
+
+        Raises:
+            ValueError: If required fields are missing or values are invalid.
+        """
+        validate_config(config)
+
+        # Convert parameters to dict
+        params = OmegaConf.to_container(config.parameters, throw_on_missing=True)
+        assert isinstance(params, dict)
+        
+        kwargs = {}
+        if "output_dir" in config:
+            kwargs["output_dir"] = config.output_dir
+
+        return cls(
+            experiment = config.experiment,
+            sweep_name = config.sweep_name,
+            command = config.command,
+            optuna_storage = config.optuna_storage,
+            mlflow_storage = config.mlflow_storage,
+            algorithm = config.algorithm,
+            parameters = params,
+            param_specs = config_params_to_spec_dict(config.parameters),
+            spec = SpecConfig.from_dict_config(config.get("spec")),
+            **kwargs,
+        )
 
 
 @dataclass(frozen=True)
@@ -244,9 +383,9 @@ def param_from_config_entry(name: str, value: Any) -> ParamSpec:
     return AtomicParam(name = name, value = value)
 
 
-def config_params_to_spec_dict(config: DictConfig) -> dict[str, ParamSpec]:
+def config_params_to_spec_dict(parameters: dict[str, Any] | DictConfig) -> dict[str, ParamSpec]:
     """Convert config.parameters into a dict of parameter specifications."""
-    params_dict = OmegaConf.to_container(config.parameters, throw_on_missing=True)
+    params_dict = OmegaConf.to_container(parameters, throw_on_missing=True)
     assert isinstance(params_dict, dict)
 
     param_specs: dict[str, ParamSpec] = {}
