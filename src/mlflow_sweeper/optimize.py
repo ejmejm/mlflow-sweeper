@@ -12,6 +12,7 @@ import sys
 from typing import TYPE_CHECKING
 import warnings
 
+from filelock import FileLock
 import optuna
 from optuna import exceptions
 from optuna import logging
@@ -35,7 +36,7 @@ if TYPE_CHECKING:
 _logger = logging.get_logger(__name__)
 
 
-def _optimize(
+def optimize_study(
     study: "optuna.Study",
     func: "optuna.study.study.ObjectiveFuncType",
     n_trials: int | None = None,
@@ -145,8 +146,11 @@ def _optimize_sequential(
 
     if time_start is None:
         time_start = datetime.datetime.now()
+        
+    lock = FileLock(f"test_lock.lock")
 
     while True:
+        lock.acquire()
         if study._stop_flag:
             break
 
@@ -161,7 +165,7 @@ def _optimize_sequential(
                 break
 
         try:
-            frozen_trial_id = _run_trial(study, func, catch)
+            frozen_trial_id = _run_trial(study, func, catch, lock)
         finally:
             # The following line mitigates memory problems that can be occurred in some
             # environments (e.g., services that use computing containers such as GitHub Actions).
@@ -169,6 +173,7 @@ def _optimize_sequential(
             # https://github.com/optuna/optuna/pull/325.
             if gc_after_trial:
                 gc.collect()
+            lock.release()
 
         if callbacks is not None:
             frozen_trial = study._storage.get_trial(frozen_trial_id)
@@ -186,6 +191,7 @@ def _run_trial(
     study: "optuna.Study",
     func: "optuna.study.study.ObjectiveFuncType",
     catch: tuple[type[Exception], ...],
+    ask_lock: FileLock,
 ) -> int:
     if is_heartbeat_enabled(study._storage):
         with warnings.catch_warnings():
@@ -194,6 +200,7 @@ def _run_trial(
             optuna.storages.fail_stale_trials(study)
 
     trial = study.ask()
+    ask_lock.release()
 
     state: TrialState | None = None
     value_or_values: float | Sequence[float] | None = None

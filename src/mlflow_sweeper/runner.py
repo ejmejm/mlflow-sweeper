@@ -21,6 +21,7 @@ import optuna
 
 from mlflow_sweeper.config import ParamSpec, config_params_to_spec_dict
 from mlflow_sweeper.samplers.grid import GridSampler
+from mlflow_sweeper.optimize import optimize_study
 
 
 logger = logging.getLogger(__name__)
@@ -335,7 +336,7 @@ def run_sweep(args: argparse.Namespace, config: DictConfig) -> None:
     
     # Update the status of the parent MLFlow run based on the status of the Optuna study.
     try:
-        study.optimize(run_fn, n_trials=args.n_trials, n_jobs=args.n_jobs)
+        optimize_study(study, run_fn, n_trials=args.n_trials, n_jobs=args.n_jobs)
     except KeyboardInterrupt as e:
         mlflow.end_run(RunStatus.to_string(RunStatus.KILLED))
         raise e
