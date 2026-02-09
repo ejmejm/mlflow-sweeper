@@ -85,6 +85,66 @@ flowchart TD
     style Loop fill:#0d0d1a,stroke:#3a3a5a
 ```
 
+## Random Sampler
+
+```mermaid
+flowchart TD
+    Start([run_sweep]) --> Init[Create/load Optuna study<br>+ MLflow parent run]
+    Init --> Sync[Sync: void Optuna trials<br>whose MLflow runs were deleted]
+    Sync --> Complete{Study already<br>complete?}
+    Complete -- YES --> DoneEarly([Return early])
+    Complete -- NO --> Loop
+
+    subgraph Loop [Optimization Loop]
+        Ask[study.ask<br>Creates trial in<br>RUNNING state] --> BeforeTrial
+
+        subgraph BeforeTrial [RandomSampler.before_trial]
+            Lock[Acquire FileLock] --> Count[Count random_group trials]
+            Count --> CapHit{count >= n_runs?}
+            CapHit -- YES --> Preempt[Mark trial as<br>PREEMPTED]
+            CapHit -- NO --> MarkGroup[Mark trial as<br>random_group]
+        end
+
+        MarkGroup --> RunSub[Run subprocess<br>with sampled params]
+        Preempt --> PruneStop[Set trial state = PRUNED<br>study.stop]
+        PruneStop --> NextIter
+
+        RunSub --> ExitCode{Subprocess<br>exit code}
+
+        ExitCode -- "0" --> Success[Optuna: COMPLETE<br>MLflow: FINISHED]
+        ExitCode -- "!= 0" --> AbortCheck{--abort-on-fail?}
+        AbortCheck -- YES --> Abort([TrialRunAbortError<br>Sweep killed])
+        AbortCheck -- NO --> Fail[Optuna: FAIL<br>MLflow: FAILED<br>TrialRunError caught]
+
+        BeforeTrial ~~~ AfterTrial
+        Success --> AfterTrial
+        Fail --> AfterTrial
+
+        subgraph AfterTrial [RandomSampler.after_trial]
+            RetryCheck{FAIL and<br>retries left?}
+            RetryCheck -- YES --> EnqueueRetry[Enqueue retry<br>with same params]
+            RetryCheck -- NO --> GridCheck
+            EnqueueRetry --> GridCheck{grid_search_space<br>set?}
+            GridCheck -- YES --> Expand[Enqueue remaining<br>grid combos with<br>same random params]
+            GridCheck -- NO --> Done[ ]
+            Expand --> Done
+        end
+
+        Done --> NextIter{n_trials reached<br>or timed out?}
+
+        NextIter -- NO --> Ask
+        NextIter -- YES --> ExitLoop
+    end
+
+    ExitLoop --> ParentStatus{Study<br>complete?}
+    ParentStatus -- YES --> Finished([Parent run = FINISHED])
+    ParentStatus -- NO --> Running([Parent run = RUNNING])
+
+    style BeforeTrial fill:#1a1a2e,stroke:#4a4a6a
+    style AfterTrial fill:#1a1a2e,stroke:#4a4a6a
+    style Loop fill:#0d0d1a,stroke:#3a3a5a
+```
+
 ### How retries work
 
 Each parameter combination maps to a **grid ID** (0 to N-1). The key
