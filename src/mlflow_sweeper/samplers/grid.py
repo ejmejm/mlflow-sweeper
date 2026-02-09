@@ -86,3 +86,17 @@ class GridSampler(BaseGridSampler):
         ]
         
         return pending_grid_ids
+
+    def after_trial(
+        self,
+        study: Study,
+        trial: FrozenTrial,
+        state: TrialState,
+        values: Sequence[float] | None,
+    ) -> None:
+        # Override the base GridSampler.after_trial which stops the study once
+        # all grid IDs have been visited (including failures). We need to keep
+        # the study running as long as there are pending retries.
+        pending = self._get_pending_grid_ids(study)
+        if len(pending) == 0:
+            study.stop()

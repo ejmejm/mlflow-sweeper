@@ -33,19 +33,29 @@ class SweepHarness:
     experiment: str
     sweep_name: str
 
-    def write_config(self, *, parameters: dict[str, Any]) -> str:
+    def write_config(
+        self,
+        *,
+        parameters: dict[str, Any],
+        command: str | None = None,
+        spec: dict[str, Any] | None = None,
+    ) -> str:
         """Write a sweep YAML config and return its path."""
+        if command is None:
+            command = f"{sys.executable} {os.path.join(self.assets_dir, 'print_sweep_vars.py')}"
         config_path = os.path.join(self.root_dir, "sweep.yaml")
-        config = {
+        config: dict[str, Any] = {
             "experiment": self.experiment,
             "sweep_name": self.sweep_name,
-            "command": f"{sys.executable} {os.path.join(self.assets_dir, 'print_sweep_vars.py')}",
+            "command": command,
             "algorithm": "grid",
             "parameters": parameters,
             "optuna_storage": self.optuna_storage,
             "mlflow_storage": self.mlflow_storage,
             "output_dir": self.output_dir,
         }
+        if spec is not None:
+            config["spec"] = spec
         OmegaConf.save(config=OmegaConf.create(config), f=config_path)
         return config_path
 

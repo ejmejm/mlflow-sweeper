@@ -9,6 +9,8 @@ import subprocess
 import sys
 import threading
 
+import os
+
 import mlflow
 import optuna
 
@@ -302,3 +304,38 @@ def test_parallel_two_processes_does_not_double_runs(sweep_harness: SweepHarness
         trial_runs=trial_runs, keys=["x", "y", "z"], parameters=grid_params
     )
     _assert_all_runs_finished(trial_runs)
+
+
+def test_failed_runs_are_retried(sweep_harness: SweepHarness) -> None:
+    max_retry = 2
+    grid_params = {
+        "should_fail": ["true", "false"],
+    }
+    config_path = sweep_harness.write_config(
+        parameters=grid_params,
+        command=f"{sys.executable} {os.path.join(sweep_harness.assets_dir, 'maybe_fail.py')}",
+        spec={"max_retry": max_retry},
+    )
+
+    sweep_harness.run_cli(config_path, "-n", "100", "-j", "1")
+
+    trial_runs = _assert_parent_and_get_trial_runs(harness=sweep_harness)
+
+    finished_runs = [r for r in trial_runs if r.info.status == "FINISHED"]
+    failed_runs = [r for r in trial_runs if r.info.status == "FAILED"]
+
+    # should_fail=false succeeds on first attempt: 1 FINISHED run.
+    assert len(finished_runs) == 1
+    # should_fail=true fails every time: 1 original + max_retry retries = 3 FAILED runs.
+    assert len(failed_runs) == max_retry + 1
+
+    # Total trial runs = 1 (success) + 3 (failures).
+    assert len(trial_runs) == 1 + (max_retry + 1)
+
+    # All FINISHED runs have should_fail=false.
+    for run in finished_runs:
+        assert _trial_param(run, "should_fail") == "false"
+
+    # All FAILED runs have should_fail=true.
+    for run in failed_runs:
+        assert _trial_param(run, "should_fail") == "true"

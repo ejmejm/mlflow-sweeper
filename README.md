@@ -51,12 +51,6 @@ Note: coordination relies on file locks in `output_dir`, so for true multi-host 
 mlflow-sweep path/to/sweep.yaml --delete
 ```
 
-### Run multiple sweeps (sequentially) from one command
-
-```bash
-mlflow-sweep path/to/sweep_a.yaml path/to/sweep_b.yaml
-```
-
 ## Config format (minimal example)
 
 ```yaml
@@ -138,9 +132,11 @@ parameters:
 - [x] Add an option to delete a sweep, and remove it from both MLFlow and Optuna storages
 - [x] Fix bug with deleted MLFlow runs leading to duplicate Optuna trials
 - [x] Better handle failed runs, ideally retrying or just overwritting with the same param set
-- [ ] Add test for testing retrying failed runs
+- [x] Add test for testing retrying failed runs
 - [ ] Delete failed runs when being replaced (do I really want to do this?)
 - [ ] Implement random sweep from config with run command and parameters
 - [ ] Implement hyperparameter sensitivity from config with run command and parameters
 - [ ] Fix bug where using the `n_jobs` option causes mlflow runs to not be parented properly
 - [ ] Move locks to the MLFlow storage
+- [ ] Pass actual arg values to sweep command so that the function can easily be used externally
+- [ ] Allow sweeps to contain a command or a function to run
