@@ -339,3 +339,30 @@ def test_failed_runs_are_retried(sweep_harness: SweepHarness) -> None:
     # All FAILED runs have should_fail=true.
     for run in failed_runs:
         assert _trial_param(run, "should_fail") == "true"
+
+
+def test_resumed_sweep_retries_failed_runs(sweep_harness: SweepHarness) -> None:
+    """Resuming a sweep should continue retrying failed combos, not skip them."""
+    max_retry = 2
+    grid_params = {"should_fail": ["true"]}  # 1 combo, always fails
+    config_path = sweep_harness.write_config(
+        parameters=grid_params,
+        command=f"{sys.executable} {os.path.join(sweep_harness.assets_dir, 'maybe_fail.py')}",
+        spec={"max_retry": max_retry},
+    )
+
+    # First run: only 1 trial allowed, so only the first attempt happens.
+    sweep_harness.run_cli(config_path, "-n", "1", "-j", "1")
+
+    trial_runs = _assert_parent_and_get_trial_runs(harness=sweep_harness)
+    assert len(trial_runs) == 1
+    assert trial_runs[0].info.status == "FAILED"
+
+    # Second run (resume): should retry the failed combo up to max_retry more times.
+    sweep_harness.run_cli(config_path, "-n", "100", "-j", "1")
+
+    trial_runs = _assert_parent_and_get_trial_runs(harness=sweep_harness)
+    failed_runs = [r for r in trial_runs if r.info.status == "FAILED"]
+
+    # Total: 1 original + max_retry retries = 3 FAILED runs.
+    assert len(failed_runs) == max_retry + 1

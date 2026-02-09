@@ -87,6 +87,11 @@ class GridSampler(BaseGridSampler):
         
         return pending_grid_ids
 
+    def is_exhausted(self, study: Study) -> bool:
+        # Override the base is_exhausted which only checks if all grid IDs have
+        # been visited, ignoring retry logic and voided trials.
+        return len(self._get_pending_grid_ids(study)) == 0
+
     def after_trial(
         self,
         study: Study,
@@ -94,9 +99,12 @@ class GridSampler(BaseGridSampler):
         state: TrialState,
         values: Sequence[float] | None,
     ) -> None:
-        # Override the base GridSampler.after_trial which stops the study once
-        # all grid IDs have been visited (including failures). We need to keep
-        # the study running as long as there are pending retries.
-        pending = self._get_pending_grid_ids(study)
-        if len(pending) == 0:
-            study.stop()
+        # Override the base GridSampler.after_trial to prevent it from
+        # prematurely stopping the study. We intentionally do nothing here
+        # because Optuna calls after_trial BEFORE writing the trial's final
+        # state to storage (_tell_with_warning). That means a just-failed
+        # trial still appears as RUNNING, causing _get_pending_grid_ids to
+        # incorrectly treat its grid_id as resolved.  Instead, we let
+        # before_trial's preemption path handle the stop: by the next
+        # iteration the state has been flushed, so the computation is correct.
+        pass
