@@ -28,6 +28,11 @@ CONFIG_REQUIRED_FIELDS = [
     "output_dir",
 ]
 VALID_ALGORITHMS = ["grid", "random"]
+SHARED_SPEC_FIELDS = {"direction", "max_retry", "metric"}
+ALGORITHM_SPEC_FIELDS: dict[str, set[str]] = {
+    "grid": set(),
+    "random": {"n_runs", "grid_params"},
+}
 
 
 def load_configs(config_paths: list[str]) -> list[DictConfig]:
@@ -57,6 +62,41 @@ def validate_config(config: DictConfig) -> None:
     if "spec" in config and "direction" in config.spec:
         if config.spec.direction not in ["minimize", "maximize", None]:
             raise ValueError("'direction' must be one of ['minimize', 'maximize', None]!")
+
+    # Validate spec fields are appropriate for the chosen algorithm
+    if "spec" in config:
+        validate_spec_fields(config)
+
+
+def validate_spec_fields(config: DictConfig) -> None:
+    """Validate that spec fields are appropriate for the chosen algorithm.
+
+    Args:
+        config: A DictConfig with 'algorithm' and 'spec' sections.
+
+    Raises:
+        ValueError: If a spec field is not allowed for the chosen algorithm.
+    """
+    algorithm = config.algorithm
+    allowed = SHARED_SPEC_FIELDS | ALGORITHM_SPEC_FIELDS.get(algorithm, set())
+    all_algorithm_fields = set().union(*ALGORITHM_SPEC_FIELDS.values())
+
+    for key in config.spec:
+        if key not in allowed:
+            # Determine if it belongs to a different algorithm
+            owner = next(
+                (alg for alg, fields in ALGORITHM_SPEC_FIELDS.items() if key in fields),
+                None,
+            )
+            if owner is not None:
+                raise ValueError(
+                    f"Spec field '{key}' is only valid for algorithm '{owner}', "
+                    f"not '{algorithm}'."
+                )
+            raise ValueError(
+                f"Unrecognized spec field '{key}'. "
+                f"Valid fields: {sorted(SHARED_SPEC_FIELDS | all_algorithm_fields)}"
+            )
 
 
 def _parse_direction(direction_str: str | None) -> StudyDirection:
@@ -98,17 +138,16 @@ def optuna_direction(config: DictConfig) -> StudyDirection:
     return _parse_direction(config.spec.direction)
 
 
-# TODO: Add some sort of validation for the spec config, or make it clear
-#       which params are relevant for which samplers.
+# Field ownership is enforced by validate_spec_fields(); see ALGORITHM_SPEC_FIELDS.
 @dataclass
 class SpecConfig:
     """Parsed spec configuration for sweep optimization."""
 
-    direction: StudyDirection = StudyDirection.MINIMIZE
-    max_retry: int = 3
-    metric: str | None = None
-    n_runs: int | None = None
-    grid_params: list[str] | None = None
+    direction: StudyDirection = StudyDirection.MINIMIZE  # [shared]
+    max_retry: int = 3  # [shared]
+    metric: str | None = None  # [shared]
+    n_runs: int | None = None  # [random]
+    grid_params: list[str] | None = None  # [random]
 
     @classmethod
     def from_dict_config(cls, spec: DictConfig | None) -> "SpecConfig":
