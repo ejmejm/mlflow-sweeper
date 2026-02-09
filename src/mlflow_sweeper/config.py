@@ -27,7 +27,7 @@ CONFIG_REQUIRED_FIELDS = [
     "mlflow_storage",
     "output_dir",
 ]
-VALID_ALGORITHMS = ["grid"]
+VALID_ALGORITHMS = ["grid", "random"]
 
 
 def load_configs(config_paths: list[str]) -> list[DictConfig]:
@@ -98,6 +98,8 @@ def optuna_direction(config: DictConfig) -> StudyDirection:
     return _parse_direction(config.spec.direction)
 
 
+# TODO: Add some sort of validation for the spec config, or make it clear
+#       which params are relevant for which samplers.
 @dataclass
 class SpecConfig:
     """Parsed spec configuration for sweep optimization."""
@@ -105,6 +107,8 @@ class SpecConfig:
     direction: StudyDirection = StudyDirection.MINIMIZE
     max_retry: int = 3
     metric: str | None = None
+    n_runs: int | None = None
+    grid_params: list[str] | None = None
 
     @classmethod
     def from_dict_config(cls, spec: DictConfig | None) -> "SpecConfig":
@@ -129,6 +133,12 @@ class SpecConfig:
 
         if "metric" in spec:
             kwargs["metric"] = spec.metric
+
+        if "n_runs" in spec:
+            kwargs["n_runs"] = spec.n_runs
+
+        if "grid_params" in spec:
+            kwargs["grid_params"] = list(spec.grid_params)
 
         return cls(**kwargs)
 

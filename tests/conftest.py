@@ -39,6 +39,7 @@ class SweepHarness:
         parameters: dict[str, Any],
         command: str | None = None,
         spec: dict[str, Any] | None = None,
+        algorithm: str = "grid",
     ) -> str:
         """Write a sweep YAML config and return its path."""
         if command is None:
@@ -48,7 +49,7 @@ class SweepHarness:
             "experiment": self.experiment,
             "sweep_name": self.sweep_name,
             "command": command,
-            "algorithm": "grid",
+            "algorithm": algorithm,
             "parameters": parameters,
             "optuna_storage": self.optuna_storage,
             "mlflow_storage": self.mlflow_storage,

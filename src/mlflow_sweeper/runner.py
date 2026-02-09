@@ -21,6 +21,7 @@ import optuna
 
 from mlflow_sweeper.config import ParamSpec, SweepConfig
 from mlflow_sweeper.samplers.grid import GridSampler
+from mlflow_sweeper.samplers.random import RandomSampler
 from mlflow_sweeper.optimize import optimize_study
 
 
@@ -113,6 +114,18 @@ def make_sampler(config: SweepConfig) -> optuna.samplers.BaseSampler:
     if config.algorithm == "grid":
         search_space = {name: spec.to_list() for name, spec in config.param_specs.items()}
         return GridSampler(search_space, max_retry_count=config.spec.max_retry)
+    elif config.algorithm == "random":
+        grid_search_space = None
+        if config.spec.grid_params:
+            grid_search_space = {
+                name: config.param_specs[name].to_list()
+                for name in config.spec.grid_params
+            }
+        return RandomSampler(
+            n_runs=config.spec.n_runs,
+            max_retry_count=config.spec.max_retry,
+            grid_search_space=grid_search_space,
+        )
     raise ValueError(f"Invalid sweep algorithm: {config.algorithm}")
 
 
@@ -146,7 +159,7 @@ def init_study(config: SweepConfig) -> optuna.Study:
 
 def check_study_is_complete(study: optuna.Study) -> bool:
     """Check if the study is complete."""
-    if isinstance(study.sampler, GridSampler):
+    if hasattr(study.sampler, 'is_exhausted'):
         return study.sampler.is_exhausted(study)
     raise ValueError(f"Invalid study sampler: {study.sampler}")
 
