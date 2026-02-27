@@ -97,6 +97,16 @@ def parse_args() -> argparse.Namespace:
         help = "Terminate the sweep if an error occurs in any trial.",
         default = False,
     )
+    parser.add_argument(
+        "--log-params",
+        action = "store_true",
+        default = False,
+        help = (
+            "Log individual sweep parameter values to the MLflow trial run. "
+            "Disabled by default so that the subprocess can log its own resolved "
+            "parameter values without hitting MLflow's param-immutability restriction."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -195,7 +205,8 @@ def run_experiment(
     trial.set_user_attr('mlflow_run_id', trial_run_id)
 
     mlflow.log_param("full_command", full_command_str)
-    mlflow.log_params(param_values)
+    if args.log_params:
+        mlflow.log_params(param_values)
     
     environ = os.environ.copy()
     environ["MLFLOW_RUN_ID"] = trial_run_id
