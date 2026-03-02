@@ -16,6 +16,7 @@ dependencies = [
   "numpy",
   "omegaconf",
   "optuna",
+  "sqlalchemy>=1.4",
 ]
 
 [project.scripts]

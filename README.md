@@ -122,7 +122,7 @@ parameters:
     log: false     # optional (default false)
 ```
 
-## TODO (moved from code)
+## TODO
 
 - [x] Implement grid sweep from config with run command and parameters
 - [x] Only have a single parent MLFlow run for all trials even when distributed
@@ -133,10 +133,10 @@ parameters:
 - [x] Fix bug with deleted MLFlow runs leading to duplicate Optuna trials
 - [x] Better handle failed runs, ideally retrying or just overwritting with the same param set
 - [x] Add test for testing retrying failed runs
-- [ ] Delete failed runs when being replaced (do I really want to do this?)
-- [ ] Implement random sweep from config with run command and parameters
+- [x] Implement random sweep from config with run command and parameters
 - [ ] Implement hyperparameter sensitivity from config with run command and parameters
 - [ ] Fix bug where using the `n_jobs` option causes mlflow runs to not be parented properly
-- [ ] Move locks to the MLFlow storage
+- [x] Move locks to the MLFlow storage
 - [ ] Pass actual arg values to sweep command so that the function can easily be used externally
 - [ ] Allow sweeps to contain a command or a function to run
+- [ ] Delete failed runs when being replaced (do I really want to do this?)

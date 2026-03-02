@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 from functools import partial
-import hashlib
 import logging
 import os
 import signal
@@ -12,7 +11,6 @@ import subprocess
 import time
 from typing import Any
 
-from filelock import FileLock
 import mlflow
 from mlflow.entities import RunStatus
 from mlflow.tracking import MlflowClient
@@ -20,12 +18,22 @@ from omegaconf import OmegaConf
 import optuna
 
 from mlflow_sweeper.config import ParamSpec, SweepConfig
+from mlflow_sweeper.locking import LockManager
 from mlflow_sweeper.samplers.grid import GridSampler
 from mlflow_sweeper.samplers.random import RandomSampler
 from mlflow_sweeper.optimize import optimize_study
 
 
 logger = logging.getLogger(__name__)
+
+# Lock names used by the lock manager. Only locks with the same name block each other.
+LOCK_STUDY_INIT = "study_init"            # Guards Optuna study creation and voided-trial sync.
+LOCK_MLFLOW_DB_INIT = "mlflow_db_init"    # Serializes MLflow DB/experiment initialization.
+LOCK_MLFLOW_PARENT = "mlflow_parent"      # Guards MLflow parent run creation (one per sweep).
+LOCK_SAMPLER = "sampler"                  # Guards sampler state (grid ID / n_runs counting).
+
+MLFLOW_INIT_MAX_RETRIES = 5
+MLFLOW_INIT_BASE_DELAY = 0.2
 
 
 class TrialRunError(Exception):
@@ -115,15 +123,11 @@ def get_study_name(config: SweepConfig) -> str:
     return f"{config.experiment}/{config.sweep_name}"
 
 
-def get_lock_dir(config: SweepConfig) -> str:
-    return os.path.join(config.output_dir, 'locks')
-
-
-def make_sampler(config: SweepConfig) -> optuna.samplers.BaseSampler:
+def make_sampler(config: SweepConfig, lock_manager: LockManager) -> optuna.samplers.BaseSampler:
     """Create the Optuna sampler for this sweep."""
     if config.algorithm == "grid":
         search_space = {name: spec.to_list() for name, spec in config.param_specs.items()}
-        return GridSampler(search_space, max_retry_count=config.spec.max_retry)
+        return GridSampler(search_space, max_retry_count=config.spec.max_retry, lock_manager=lock_manager)
     elif config.algorithm == "random":
         grid_search_space = None
         if config.spec.grid_params:
@@ -135,31 +139,19 @@ def make_sampler(config: SweepConfig) -> optuna.samplers.BaseSampler:
             n_runs=config.spec.n_runs,
             max_retry_count=config.spec.max_retry,
             grid_search_space=grid_search_space,
+            lock_manager=lock_manager,
         )
     raise ValueError(f"Invalid sweep algorithm: {config.algorithm}")
 
 
-def _optuna_study_lock_path(config: SweepConfig) -> str:
-    """File lock path used to guard study creation."""
-    study_name = get_study_name(config)
-    lock_id = hashlib.md5(f"{study_name}:{config.optuna_storage}".encode("utf-8")).hexdigest()
-    return os.path.join(get_lock_dir(config), f"study_{lock_id}.lock")
-
-
-def _mlflow_db_lock_path(config: SweepConfig) -> str:
-    """File lock path used to guard MLflow database initialization."""
-    lock_id = hashlib.md5(config.mlflow_storage.encode("utf-8")).hexdigest()
-    return os.path.join(get_lock_dir(config), f"mlflow_db_{lock_id}.lock")
-
-
-def init_study(config: SweepConfig) -> optuna.Study:
+def init_study(config: SweepConfig, lock_manager: LockManager) -> optuna.Study:
     """Initialize (or load) an Optuna study for this sweep."""
     study_name = get_study_name(config)
 
-    with FileLock(_optuna_study_lock_path(config)):
+    with lock_manager.lock(f"{LOCK_STUDY_INIT}:{study_name}"):
         study = optuna.create_study(
             study_name = study_name,
-            sampler = make_sampler(config),
+            sampler = make_sampler(config, lock_manager),
             storage = config.optuna_storage,
             direction = config.spec.direction,
             load_if_exists = True,
@@ -282,15 +274,11 @@ def run_experiment(
 
 
 def start_mlflow_parent_run(
-    client: MlflowClient, config: SweepConfig, optuna_study_name: str
+    client: MlflowClient, config: SweepConfig, optuna_study_name: str,
+    lock_manager: LockManager,
 ) -> mlflow.ActiveRun:
     """Create or reuse a single MLflow parent run for this sweep."""
-    lock_id = hashlib.md5(
-        f"{config.mlflow_storage}:{optuna_study_name}".encode("utf-8")
-    ).hexdigest()
-    lock_path = os.path.join(get_lock_dir(config), f"mlflow_sweep_parent_{lock_id}.lock")
-
-    with FileLock(lock_path):
+    with lock_manager.lock(f"{LOCK_MLFLOW_PARENT}:{optuna_study_name}"):
         runs = mlflow.search_runs(
             experiment_names = [config.experiment],
             filter_string = (
@@ -323,9 +311,10 @@ def sync_mlflow_and_optuna(
     study: optuna.Study,
     mlflow_client: MlflowClient,
     config: SweepConfig,
+    lock_manager: LockManager,
 ) -> None:
     """Sync the Optuna study with the MLFlow parent run, voiding any Optuna trials that no longer have a corresponding MLFlow run."""
-    
+
     # Get all of the valid MLFlow runs for the given experiment.
     experiment = mlflow_client.get_experiment_by_name(config.experiment)
     if experiment is None:
@@ -336,11 +325,12 @@ def sync_mlflow_and_optuna(
         filter_string = f'tags.sweep_name = "{config.sweep_name}"',
     )
     valid_run_ids = [run.info.run_id for run in mlflow_runs]
-    
+
     # Void any Optuna trials that no longer have a corresponding MLFlow run.
     # Optuna doesn't provide a method to directly delete them, and deleting and recreating the whole study
     # could cause problems if other processes are accessing the study.
-    with FileLock(_optuna_study_lock_path(config)):
+    study_name = get_study_name(config)
+    with lock_manager.lock(f"{LOCK_STUDY_INIT}:{study_name}"):
         voided_trial_ids = study._storage.get_study_user_attrs(study._study_id).get('voided_trial_ids', [])
         optuna_trials = study.get_trials()
         for trial in optuna_trials:
@@ -349,21 +339,54 @@ def sync_mlflow_and_optuna(
         study._storage.set_study_user_attr(study._study_id, 'voided_trial_ids', voided_trial_ids)
 
 
+def _init_mlflow_client(config: SweepConfig) -> MlflowClient:
+    """Create an MlflowClient and set the experiment, retrying on transient init errors.
+
+    When multiple agents start simultaneously the MLflow database may not be
+    fully initialized yet.  Retrying with backoff lets the first writer finish
+    before the others proceed.
+    """
+    import random
+
+    for attempt in range(MLFLOW_INIT_MAX_RETRIES):
+        try:
+            client = MlflowClient(tracking_uri=config.mlflow_storage)
+            mlflow.set_experiment(config.experiment)
+            return client
+        except Exception:
+            if attempt == MLFLOW_INIT_MAX_RETRIES - 1:
+                raise
+            delay = MLFLOW_INIT_BASE_DELAY * (2 ** attempt)
+            jitter = random.uniform(0, delay * 0.5)
+            logger.warning(
+                "MLflow initialization failed (attempt %d/%d), retrying in %.1fs...",
+                attempt + 1, MLFLOW_INIT_MAX_RETRIES, delay + jitter,
+            )
+            time.sleep(delay + jitter)
+    raise RuntimeError("Unreachable")
+
+
 def run_sweep(args: argparse.Namespace, config: SweepConfig) -> None:
     """Run a full sweep for a single config."""
     os.makedirs(config.output_dir, exist_ok=True)
 
-    study = init_study(config)
+    lock_manager = LockManager(
+        mlflow_storage=config.mlflow_storage,
+        optuna_storage=config.optuna_storage,
+        lock_dir=os.path.join(config.output_dir, 'locks'),
+    )
+
+    study = init_study(config, lock_manager)
 
     mlflow.set_tracking_uri(config.mlflow_storage)
-    # Protect MLflow database initialization from concurrent access by multiple processes.
-    with FileLock(_mlflow_db_lock_path(config)):
-        mlflow_client = MlflowClient(tracking_uri=config.mlflow_storage)
-        mlflow.set_experiment(config.experiment)
-        start_mlflow_parent_run(mlflow_client, config, study.study_name)
-    
+    # Serialize MLflow initialization so that one process fully creates the DB/experiment
+    # before others proceed. This matches the old FileLock(_mlflow_db_lock_path) behavior.
+    with lock_manager.lock(LOCK_MLFLOW_DB_INIT):
+        mlflow_client = _init_mlflow_client(config)
+        start_mlflow_parent_run(mlflow_client, config, study.study_name, lock_manager)
+
     # This will delete any Optuna trials that no longer exist in MLFlow.
-    sync_mlflow_and_optuna(study, mlflow_client, config)
+    sync_mlflow_and_optuna(study, mlflow_client, config, lock_manager)
     
     if check_study_is_complete(study):
         logger.info("Study is complete. No more trials to run.")
@@ -402,6 +425,12 @@ def run_sweep(args: argparse.Namespace, config: SweepConfig) -> None:
 
 def delete_sweep(config: SweepConfig) -> None:
     """Delete all Optuna + MLflow artifacts associated with a sweep config."""
+    lock_manager = LockManager(
+        mlflow_storage=config.mlflow_storage,
+        optuna_storage=config.optuna_storage,
+        lock_dir=os.path.join(config.output_dir, 'locks'),
+    )
+
     study_name = get_study_name(config)
     try:
         optuna.delete_study(study_name=study_name, storage=config.optuna_storage)
@@ -409,9 +438,8 @@ def delete_sweep(config: SweepConfig) -> None:
     except KeyError:
         logger.warning("Could not find Optuna study: %s.", study_name)
 
-    # Protect MLflow database initialization from concurrent access by multiple processes.
-    with FileLock(_mlflow_db_lock_path(config)):
-        mlflow_client = MlflowClient(tracking_uri=config.mlflow_storage)
+    with lock_manager.lock(LOCK_MLFLOW_DB_INIT):
+        mlflow_client = _init_mlflow_client(config)
     experiment = mlflow_client.get_experiment_by_name(config.experiment)
     if experiment is None:
         logger.warning("Could not find MLflow experiment: %s.", config.experiment)

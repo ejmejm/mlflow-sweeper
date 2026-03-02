@@ -1,12 +1,13 @@
+from contextlib import nullcontext
 import itertools
 import logging
 from typing import Sequence
 
-from filelock import FileLock
 from optuna import Study
 from optuna.samplers import RandomSampler as BaseRandomSampler
 from optuna.trial import FrozenTrial, TrialState
 
+from mlflow_sweeper.locking import LockManager
 from mlflow_sweeper.optimize import PREEMPTED_KEY, PREEMPTION_REASON_KEY, PREEMPTION_REASON_NO_MORE_TRIALS
 
 
@@ -25,11 +26,13 @@ class RandomSampler(BaseRandomSampler):
         seed: int | None = None,
         max_retry_count: int = 3,
         grid_search_space: dict[str, list] | None = None,
+        lock_manager: LockManager | None = None,
     ) -> None:
         super().__init__(seed)
         self._n_runs = n_runs
         self._max_retry_count = max_retry_count
         self._grid_search_space = grid_search_space or {}
+        self._lock_manager = lock_manager
 
         if self._grid_search_space:
             keys = sorted(self._grid_search_space.keys())
@@ -58,7 +61,8 @@ class RandomSampler(BaseRandomSampler):
             return
 
         if self._n_runs is not None:
-            with FileLock(f"output/{study.study_name}.lock"):
+            lock = self._lock_manager.lock(f"sampler:{study.study_name}") if self._lock_manager else nullcontext()
+            with lock:
                 count = self._count_random_groups(study)
                 if count >= self._n_runs:
                     study._storage.set_trial_user_attr(trial._trial_id, PREEMPTED_KEY, True)
