@@ -362,6 +362,11 @@ def plot_best_hyperparameters(
     if plot_config.top_n is not None:
         df = df.head(plot_config.top_n)
 
+    # Drop parameters that are constant across all runs.
+    param_cols = [c for c in df.columns if c != metric_name]
+    constant = [c for c in param_cols if df[c].nunique(dropna=False) <= 1]
+    df = df.drop(columns=constant)
+
     df.insert(0, "rank", range(1, len(df) + 1))
 
     fig = go.Figure(data=[go.Table(
