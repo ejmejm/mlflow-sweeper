@@ -15,6 +15,7 @@ from typing import Any
 from filelock import FileLock
 import mlflow
 from mlflow.entities import RunStatus
+from mlflow.exceptions import MlflowException
 from mlflow.tracking import MlflowClient
 from omegaconf import OmegaConf
 import optuna
@@ -379,10 +380,22 @@ def run_sweep(args: argparse.Namespace, config: SweepConfig) -> None:
         return
 
     logger.info("Running sweep: %s/%s", config.experiment, config.sweep_name)
-    
+
     structured_config = OmegaConf.structured(config)
     dict_config = OmegaConf.to_container(structured_config, throw_on_missing=True)
-    mlflow.log_params(dict_config)
+
+    try:
+        mlflow.log_params(dict_config)
+    except MlflowException as e:
+        if "Changing param values is not allowed" not in str(e):
+            raise
+        logger.error(
+            "Sweep config has changed since the last run. To run with the new "
+            "config, either:\n"
+            "  1. Delete the existing sweep with --delete and start fresh, or\n"
+            "  2. Rename the sweep (change 'sweep_name' in your config)."
+        )
+        raise SystemExit(1) from e
 
     run_fn = partial(
         run_experiment,

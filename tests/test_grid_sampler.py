@@ -177,6 +177,28 @@ def test_failed_runs_are_retried(sweep_harness: SweepHarness) -> None:
         assert _trial_param(run, "should_fail") == "true"
 
 
+def test_changed_config_errors_with_clear_message(sweep_harness: SweepHarness) -> None:
+    """Changing sweep params on an existing sweep should fail with a clear error."""
+    initial_params = {
+        "color": ["red", "blue"],
+        "shape": ["square"],
+    }
+    config_path = sweep_harness.write_config(parameters=initial_params)
+    sweep_harness.run_cli(config_path)
+
+    # Change the config and re-run without deleting or renaming.
+    expanded_params = {
+        "color": ["red", "blue"],
+        "shape": ["square", "circle"],
+    }
+    config_path = sweep_harness.write_config(parameters=expanded_params)
+
+    cmd = [sys.executable, os.path.join(sweep_harness.repo_root, "sweep.py"), config_path]
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=False)
+    assert proc.returncode != 0, "Expected failure when config has changed"
+    assert "changed since the last run" in proc.stdout
+
+
 def test_resumed_sweep_retries_failed_runs(sweep_harness: SweepHarness) -> None:
     """Resuming a sweep should continue retrying failed combos, not skip them."""
     max_retry = 2
