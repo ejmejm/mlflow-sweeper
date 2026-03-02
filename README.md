@@ -136,7 +136,7 @@ By default, all compatible plots are generated. If a plot is not compatible with
 
 ### Selecting which plots to generate
 
-Use the `plots` key to choose which plots to generate, and `plot_params` to configure them:
+Use the `plots` key to choose which plots to generate, and `plot_params` to configure them. Global options like `metrics` and `split_by` apply to all plots; per-plot options are nested under the plot name:
 
 ```yaml
 # Only generate the listed plots (default settings)
@@ -145,6 +145,8 @@ plots: [best_hyperparameters]
 # Select plots and configure them separately
 plots: [best_hyperparameters, sensitivity]
 plot_params:
+  metrics: [loss, accuracy]
+  split_by: [dataset]
   best_hyperparameters:
     top_n: 10
   sensitivity:

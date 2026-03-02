@@ -19,8 +19,7 @@ from mlflow.tracking import MlflowClient
 if TYPE_CHECKING:
     import optuna
     from mlflow_sweeper.config import (
-        BestHyperparametersPlotConfig,
-        SensitivityPlotConfig,
+        PlotsConfig,
         SweepConfig,
     )
 
@@ -40,7 +39,7 @@ def generate_plots(study: optuna.Study, config: SweepConfig) -> None:
 
     if "best_hyperparameters" in plots_config.enabled_plots:
         try:
-            plot_best_hyperparameters(study, config, plots_config.best_hyperparameters)
+            plot_best_hyperparameters(study, config, plots_config)
         except Exception:
             logger.warning("Failed to generate best_hyperparameters plot.", exc_info=True)
     else:
@@ -55,7 +54,7 @@ def generate_plots(study: optuna.Study, config: SweepConfig) -> None:
             )
         else:
             try:
-                plot_sensitivity(study, config, plots_config.sensitivity)
+                plot_sensitivity(study, config, plots_config)
             except Exception:
                 logger.warning("Failed to generate sensitivity plot.", exc_info=True)
     else:
@@ -272,15 +271,16 @@ def _build_sensitivity_figure(
     return fig
 
 
-def _build_sensitivity_html(
+def _build_interactive_html(
     figures: dict[str, go.Figure],
     dims: list[tuple[str, list[str]]],
     title: str,
 ) -> str:
-    """Build an HTML page with dropdowns + tabs for multi-dimensional sensitivity plots.
+    """Build an HTML page with dropdowns + optional tabs for interactive plots.
 
-    dims: list of (label, values) tuples. Last dim is always tabs, others are dropdowns
-          (hidden when only 1 value).
+    dims: list of (label, values) tuples. The last dim is rendered as tabs
+          (unless it has only 1 value, in which case the tab bar is hidden).
+          Other dims are rendered as dropdowns (hidden when only 1 value).
     figures: keyed by dash-separated indices matching dims order.
     """
     fig_entries = []
@@ -307,18 +307,30 @@ def _build_sensitivity_html(
             dims_js_parts.append("{type:\"fixed\",value:0}")
 
     tab_label, tab_values = dims[-1]
-    dims_js_parts.append('{type:"tab"}')
+    show_tabs = len(tab_values) > 1
 
-    tab_buttons = []
-    for i, name in enumerate(tab_values):
-        active = " active" if i == 0 else ""
-        tab_buttons.append(
-            f'<div class="tab{active}" onclick="showTab({i})">{name}</div>'
-        )
+    if show_tabs:
+        dims_js_parts.append('{type:"tab"}')
+        tab_buttons = []
+        for i, name in enumerate(tab_values):
+            active = " active" if i == 0 else ""
+            tab_buttons.append(
+                f'<div class="tab{active}" onclick="showTab({i})">{name}</div>'
+            )
+        tab_buttons_html = "".join(tab_buttons)
+    else:
+        dims_js_parts.append("{type:\"fixed\",value:0}")
 
     dropdown_html = "\n    ".join(dropdown_html_parts)
-    tab_buttons_html = "".join(tab_buttons)
     dims_js = "[" + ",".join(dims_js_parts) + "]"
+
+    tab_bar_html = ""
+    plot_area_style = ""
+    if show_tabs:
+        tab_bar_html = f"""<div class="tab-bar">
+    {tab_buttons_html}
+  </div>"""
+        plot_area_style = ' class="plot-area"'
 
     return f"""<!DOCTYPE html>
 <html>
@@ -379,10 +391,8 @@ def _build_sensitivity_html(
 <body>
   <h3>{title}</h3>
   {dropdown_html}
-  <div class="tab-bar">
-    {tab_buttons_html}
-  </div>
-  <div class="plot-area">
+  {tab_bar_html}
+  <div{plot_area_style}>
     <div id="plot" style="width:100%;height:500px;"></div>
   </div>
   <script>
@@ -421,41 +431,13 @@ def _build_sensitivity_html(
 </html>"""
 
 
-def plot_best_hyperparameters(
-    study: optuna.Study,
-    config: SweepConfig,
-    plot_config: BestHyperparametersPlotConfig,
-) -> None:
-    """Generate an interactive table of trials ranked by metric value."""
-    metric_name = config.spec.metric
-    assert metric_name is not None
-
-    df = _trials_to_dataframe(config, [metric_name])
-    if df.empty:
-        return
-
-    from optuna.study import StudyDirection
-    ascending = config.spec.direction != StudyDirection.MAXIMIZE
-    df = df.sort_values(metric_name, ascending=ascending).reset_index(drop=True)
-
-    if plot_config.top_n is not None:
-        df = df.head(plot_config.top_n)
-
-    # Drop parameters that are constant across all runs.
-    param_cols = [c for c in df.columns if c != metric_name]
-    constant = [c for c in param_cols if df[c].nunique(dropna=False) <= 1]
-    df = df.drop(columns=constant)
-
-    # Format power-of-2 parameters for display.
-    pow2_params = _detect_pow2_params(df, list(config.param_specs.keys()))
-    for col in pow2_params:
-        if col in df.columns:
-            df[col] = df[col].apply(
-                lambda v: _format_power_of_2(v) if _is_power_of_2(v) else v
-            )
-
-    df.insert(0, "rank", range(1, len(df) + 1))
-
+def _build_table_figure(
+    df: pd.DataFrame,
+    metric_name: str,
+    ascending: bool,
+) -> go.Figure:
+    """Build a Plotly table figure from a prepared DataFrame."""
+    direction_label = "lowest" if ascending else "highest"
     fig = go.Figure(data=[go.Table(
         header=dict(
             values=[f"<b>{col}</b>" for col in df.columns],
@@ -469,27 +451,115 @@ def plot_best_hyperparameters(
             align="center",
         ),
     )])
-
-    direction_label = "lowest" if ascending else "highest"
     fig.update_layout(
         title=f"Hyperparameter Ranking ({direction_label} {metric_name} is best)",
         margin=dict(l=20, r=20, t=40, b=20),
     )
+    return fig
 
-    _log_figure(fig, "best_hyperparameters.html")
+
+def plot_best_hyperparameters(
+    study: optuna.Study,
+    config: SweepConfig,
+    plots_config: PlotsConfig,
+) -> None:
+    """Generate an interactive table of trials ranked by metric value."""
+    metric_name = config.spec.metric
+    assert metric_name is not None
+
+    plot_config = plots_config.best_hyperparameters
+    metric_names = plots_config.metrics or [metric_name]
+    split_by = plots_config.split_by or []
+
+    df = _trials_to_dataframe(config, metric_names)
+    if df.empty:
+        return
+
+    from optuna.study import StudyDirection
+    ascending = config.spec.direction != StudyDirection.MAXIMIZE
+    pow2_params = _detect_pow2_params(df, list(config.param_specs.keys()))
+    metric_set = set(metric_names)
+
+    def prepare_table(sub_df: pd.DataFrame, sort_metric: str) -> pd.DataFrame:
+        sub_df = sub_df.sort_values(sort_metric, ascending=ascending).reset_index(drop=True)
+        if plot_config.top_n is not None:
+            sub_df = sub_df.head(plot_config.top_n)
+        # Drop split_by columns (shown in dropdown) and constant params.
+        sub_df = sub_df.drop(columns=[c for c in split_by if c in sub_df.columns])
+        param_cols = [c for c in sub_df.columns if c not in metric_set]
+        constant = [c for c in param_cols if sub_df[c].nunique(dropna=False) <= 1]
+        sub_df = sub_df.drop(columns=constant)
+        for col in pow2_params:
+            if col in sub_df.columns:
+                sub_df[col] = sub_df[col].apply(
+                    lambda v: _format_power_of_2(v) if _is_power_of_2(v) else v
+                )
+        sub_df.insert(0, "rank", range(1, len(sub_df) + 1))
+        return sub_df
+
+    # Simple case: single metric, no split_by → plain Plotly figure.
+    if len(metric_names) == 1 and not split_by:
+        table_df = prepare_table(df, metric_name)
+        fig = _build_table_figure(table_df, metric_name, ascending)
+        _log_figure(fig, "best_hyperparameters.html")
+        return
+
+    # Interactive case: metric dropdown and/or split_by dropdowns.
+    split_values: dict[str, list] = {}
+    for param in split_by:
+        split_values[param] = sorted(
+            df[param].unique(), key=lambda v: (isinstance(v, str), v),
+        )
+
+    figures: dict[str, go.Figure] = {}
+    split_ranges = [range(len(split_values[p])) for p in split_by]
+    split_combos = list(itertools.product(*split_ranges)) if split_by else [()]
+
+    for m_idx, metric in enumerate(metric_names):
+        if metric not in df.columns:
+            continue
+        for split_combo in split_combos:
+            sub_df = df
+            for i, param in enumerate(split_by):
+                sub_df = sub_df[sub_df[param] == split_values[param][split_combo[i]]]
+
+            key_parts = [str(m_idx)]
+            for s_idx in split_combo:
+                key_parts.append(str(s_idx))
+            key_parts.append("0")  # dummy tab
+            key = "-".join(key_parts)
+
+            table_df = prepare_table(sub_df, metric)
+            figures[key] = _build_table_figure(table_df, metric, ascending)
+
+    dims: list[tuple[str, list[str]]] = []
+    dims.append(("Metric", metric_names))
+    for param in split_by:
+        dims.append((
+            param,
+            [_fmt_val(v, param, pow2_params) for v in split_values[param]],
+        ))
+    dims.append(("_", [""]))  # dummy tab (hidden)
+
+    html = _build_interactive_html(
+        figures, dims,
+        title="Hyperparameter Ranking",
+    )
+    _log_html(html, "best_hyperparameters.html")
 
 
 def plot_sensitivity(
     study: optuna.Study,
     config: SweepConfig,
-    plot_config: SensitivityPlotConfig,
+    plots_config: PlotsConfig,
 ) -> None:
     """Generate a sensitivity plot with dropdowns for metrics/splits and tabs per param."""
     metric_name = config.spec.metric
     assert metric_name is not None
 
-    metric_names = plot_config.metrics or [metric_name]
-    split_by = plot_config.split_by or []
+    plot_config = plots_config.sensitivity
+    metric_names = plots_config.metrics or [metric_name]
+    split_by = plots_config.split_by or []
 
     df = _trials_to_dataframe(config, metric_names)
     if df.empty:
@@ -560,7 +630,7 @@ def plot_sensitivity(
         ))
     dims.append(("Parameter", tab_params))
 
-    html = _build_sensitivity_html(
+    html = _build_interactive_html(
         figures, dims,
         title="Hyperparameter Sensitivity",
     )

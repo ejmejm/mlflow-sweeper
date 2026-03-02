@@ -215,8 +215,6 @@ class SensitivityPlotConfig:
     average_over: list[str] | None = None
     params: list[str] | None = None
     hue: list[str] | None = None
-    metrics: list[str] | None = None
-    split_by: list[str] | None = None
 
     @classmethod
     def from_dict_config(cls, config: DictConfig | None) -> "SensitivityPlotConfig":
@@ -229,10 +227,6 @@ class SensitivityPlotConfig:
             kwargs["params"] = _as_str_list(config.params)
         if "hue" in config:
             kwargs["hue"] = _as_str_list(config.hue)
-        if "metrics" in config:
-            kwargs["metrics"] = _as_str_list(config.metrics)
-        if "split_by" in config:
-            kwargs["split_by"] = _as_str_list(config.split_by)
         return cls(**kwargs)
 
 
@@ -246,9 +240,14 @@ class PlotsConfig:
     The ``plots`` YAML key is a list of plot names to generate.  Per-plot
     options live under a separate ``plot_params`` key.  When ``plots`` is
     omitted, every plot is enabled with default settings.
+
+    ``metrics`` and ``split_by`` are global plot parameters that apply to
+    all plots.  They live at the top level of ``plot_params``.
     """
 
     enabled_plots: list[str] = field(default_factory=lambda: sorted(ALL_PLOT_NAMES))
+    metrics: list[str] | None = None
+    split_by: list[str] | None = None
     best_hyperparameters: BestHyperparametersPlotConfig = field(
         default_factory=BestHyperparametersPlotConfig,
     )
@@ -273,6 +272,15 @@ class PlotsConfig:
                 elif name not in enabled:
                     enabled.append(name)
 
+        # Resolve global plot params
+        metrics = None
+        split_by = None
+        if plot_params:
+            if "metrics" in plot_params:
+                metrics = _as_str_list(plot_params.metrics)
+            if "split_by" in plot_params:
+                split_by = _as_str_list(plot_params.split_by)
+
         # Resolve per-plot params
         best_hyper = BestHyperparametersPlotConfig.from_dict_config(
             plot_params.get("best_hyperparameters") if plot_params else None,
@@ -283,6 +291,8 @@ class PlotsConfig:
 
         return cls(
             enabled_plots=enabled,
+            metrics=metrics,
+            split_by=split_by,
             best_hyperparameters=best_hyper,
             sensitivity=sensitivity,
         )

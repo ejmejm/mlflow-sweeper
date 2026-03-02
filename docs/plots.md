@@ -26,6 +26,36 @@ When `plots` is omitted, all plots are enabled with default settings. `plot_para
 
 ---
 
+## Global plot parameters
+
+`metrics` and `split_by` are set at the top level of `plot_params` and apply to all plots.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `metrics` | `list[str]` | `[spec.metric]` | Metrics to include in plots. For the sensitivity plot, multiple metrics produce a dropdown to switch between them. For the best hyperparameters table, all metrics are shown as columns. Each metric must be logged by the sweep command. |
+| `split_by` | `list[str]` | `[]` | Parameters that partition the data into separate views selectable via dropdown. Each plot generates one view per combination of `split_by` values. |
+
+### Example
+
+```yaml
+plot_params:
+  metrics: [loss, accuracy]
+  split_by: [dataset]
+  best_hyperparameters:
+    top_n: 10
+  sensitivity:
+    average_over: [seed]
+    hue: [model_size]
+```
+
+In this example:
+- Both plots show `loss` and `accuracy` metrics
+- Both plots have a `dataset` dropdown to switch between independent views
+- The table shows the top 10 trials with both metric columns
+- The sensitivity plot averages over `seed` and draws separate lines per `model_size`
+
+---
+
 ## `best_hyperparameters`
 
 An interactive table of trials ranked by metric value. Works with any sweep algorithm.
@@ -65,18 +95,16 @@ The plot includes dropdowns for selecting the metric and split dimensions, and t
 | `average_over` | `list[str]` | Auto-detects params named `seed` | Parameters to average over rather than plot individually. Useful for seed/replicate dimensions where you want to see the mean performance. |
 | `params` | `list[str]` | All varying params not in `average_over`, `hue`, or `split_by` | Which parameters get their own tab in the plot. By default this is computed automatically by excluding `average_over`, `hue`, and `split_by` params from the full list of varying parameters. |
 | `hue` | `list[str]` | `[]` | Parameters that create separate colored lines within each tab rather than getting their own tab. Useful for comparing across a categorical dimension (e.g. model size) within each parameter's plot. |
-| `metrics` | `list[str]` | `[spec.metric]` | Metrics to include in the plot. When multiple metrics are provided, a dropdown is added to switch between them. Each metric must be logged by the sweep command. |
-| `split_by` | `list[str]` | `[]` | Parameters that create separate sub-plots selectable via dropdown. Unlike `hue` (which overlays lines), `split_by` fully partitions the data so each dropdown value shows an independent plot. |
 
 ### Example
 
 ```yaml
 plot_params:
+  metrics: [loss, accuracy]
+  split_by: [dataset]
   sensitivity:
     average_over: [seed, replicate]
     hue: [model_size]
-    metrics: [loss, accuracy]
-    split_by: [dataset]
 ```
 
 In this example:

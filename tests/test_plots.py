@@ -156,7 +156,7 @@ def test_sensitivity_multiple_metrics(sweep_harness: SweepHarness) -> None:
         parameters={"x": [1, 2], "y": [10, 20]},
         command=_log_metric_command(sweep_harness),
         spec={"metric": "loss", "direction": "minimize"},
-        plot_params={"sensitivity": {"metrics": ["loss", "accuracy"]}},
+        plot_params={"metrics": ["loss", "accuracy"]},
     )
 
     sweep_harness.run_cli(config_path, "--log-params")
@@ -171,7 +171,7 @@ def test_sensitivity_split_by(sweep_harness: SweepHarness) -> None:
         parameters={"x": [1, 2], "model_size": ["small", "large"]},
         command=_log_metric_command(sweep_harness),
         spec={"metric": "loss", "direction": "minimize"},
-        plot_params={"sensitivity": {"split_by": ["model_size"]}},
+        plot_params={"split_by": ["model_size"]},
     )
 
     sweep_harness.run_cli(config_path, "--log-params")
