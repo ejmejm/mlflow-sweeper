@@ -136,14 +136,15 @@ By default, all compatible plots are generated. If a plot is not compatible with
 
 ### Selecting which plots to generate
 
-Use the `plots` key in your config to control which plots are generated. You can pass a list of names for default settings, or a dict to also provide per-plot options:
+Use the `plots` key to choose which plots to generate, and `plot_params` to configure them:
 
 ```yaml
-# List form: only generate the listed plots with default settings
+# Only generate the listed plots (default settings)
 plots: [best_hyperparameters]
 
-# Dict form: only generate the listed plots, with custom options
-plots:
+# Select plots and configure them separately
+plots: [best_hyperparameters, sensitivity]
+plot_params:
   best_hyperparameters:
     top_n: 10
   sensitivity:

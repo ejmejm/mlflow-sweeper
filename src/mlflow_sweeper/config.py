@@ -141,6 +141,13 @@ def optuna_direction(config: DictConfig) -> StudyDirection:
     return _parse_direction(config.spec.direction)
 
 
+def _as_str_list(value: Any) -> list[str]:
+    """Coerce a value to a list of strings, wrapping a bare string if needed."""
+    if isinstance(value, str):
+        return [value]
+    return list(value)
+
+
 # Field ownership is enforced by validate_spec_fields(); see ALGORITHM_SPEC_FIELDS.
 @dataclass
 class SpecConfig:
@@ -180,7 +187,7 @@ class SpecConfig:
             kwargs["n_runs"] = spec.n_runs
 
         if "grid_params" in spec:
-            kwargs["grid_params"] = list(spec.grid_params)
+            kwargs["grid_params"] = _as_str_list(spec.grid_params)
 
         return cls(**kwargs)
 
@@ -217,15 +224,15 @@ class SensitivityPlotConfig:
             return cls()
         kwargs: dict[str, Any] = {}
         if "average_over" in config:
-            kwargs["average_over"] = list(config.average_over)
+            kwargs["average_over"] = _as_str_list(config.average_over)
         if "params" in config:
-            kwargs["params"] = list(config.params)
+            kwargs["params"] = _as_str_list(config.params)
         if "hue" in config:
-            kwargs["hue"] = list(config.hue)
+            kwargs["hue"] = _as_str_list(config.hue)
         if "metrics" in config:
-            kwargs["metrics"] = list(config.metrics)
+            kwargs["metrics"] = _as_str_list(config.metrics)
         if "split_by" in config:
-            kwargs["split_by"] = list(config.split_by)
+            kwargs["split_by"] = _as_str_list(config.split_by)
         return cls(**kwargs)
 
 
@@ -236,10 +243,9 @@ ALL_PLOT_NAMES = {"best_hyperparameters", "sensitivity"}
 class PlotsConfig:
     """Config for post-sweep plot generation.
 
-    The ``plots`` YAML key accepts either a list of plot names (all defaults)
-    or a dict whose keys select which plots to generate and whose values
-    provide per-plot options.  When the key is omitted entirely, every plot
-    is enabled with default settings.
+    The ``plots`` YAML key is a list of plot names to generate.  Per-plot
+    options live under a separate ``plot_params`` key.  When ``plots`` is
+    omitted, every plot is enabled with default settings.
     """
 
     enabled_plots: list[str] = field(default_factory=lambda: sorted(ALL_PLOT_NAMES))
@@ -251,35 +257,34 @@ class PlotsConfig:
     )
 
     @classmethod
-    def from_dict_config(cls, config: DictConfig | None) -> "PlotsConfig":
-        if config is None:
-            return cls()
-
-        # List form: plots: [best_hyperparameters, sensitivity]
-        if isinstance(config, (list, ListConfig)):
+    def from_config(
+        cls,
+        plots: ListConfig | list | None,
+        plot_params: DictConfig | None,
+    ) -> "PlotsConfig":
+        # Resolve enabled list
+        if plots is None:
+            enabled = sorted(ALL_PLOT_NAMES)
+        else:
             enabled = []
-            for name in config:
+            for name in plots:
                 if name not in ALL_PLOT_NAMES:
                     logger.warning("Unknown plot name '%s'; ignoring.", name)
                 elif name not in enabled:
                     enabled.append(name)
-            return cls(enabled_plots=enabled)
 
-        # Dict form: plots: {best_hyperparameters: {top_n: 10}, ...}
-        enabled = []
-        for key in config:
-            if key not in ALL_PLOT_NAMES:
-                logger.warning("Unknown plot name '%s'; ignoring.", key)
-            elif key not in enabled:
-                enabled.append(key)
+        # Resolve per-plot params
+        best_hyper = BestHyperparametersPlotConfig.from_dict_config(
+            plot_params.get("best_hyperparameters") if plot_params else None,
+        )
+        sensitivity = SensitivityPlotConfig.from_dict_config(
+            plot_params.get("sensitivity") if plot_params else None,
+        )
+
         return cls(
             enabled_plots=enabled,
-            best_hyperparameters=BestHyperparametersPlotConfig.from_dict_config(
-                config.get("best_hyperparameters"),
-            ),
-            sensitivity=SensitivityPlotConfig.from_dict_config(
-                config.get("sensitivity"),
-            ),
+            best_hyperparameters=best_hyper,
+            sensitivity=sensitivity,
         )
 
 
@@ -335,7 +340,7 @@ class SweepConfig:
             parameters = params,
             param_specs = config_params_to_spec_dict(config.parameters),
             spec = SpecConfig.from_dict_config(config.get("spec")),
-            plots = PlotsConfig.from_dict_config(config.get("plots")),
+            plots = PlotsConfig.from_config(config.get("plots"), config.get("plot_params")),
             **kwargs,
         )
 

@@ -4,22 +4,25 @@ Plots are generated automatically after a sweep completes when `spec.metric` is 
 
 ## Selecting plots
 
-The `plots` config key controls which plots are generated. It accepts either a **list** of plot names (default settings) or a **dict** whose keys select plots and whose values provide per-plot options.
+The `plots` config key is a list of plot names to generate. Per-plot options are provided separately under `plot_params`.
 
 ```yaml
 # All plots with defaults (same as omitting the key entirely)
 plots: [best_hyperparameters, sensitivity]
 
-# Only the table, with custom options
-plots:
+# Only the table
+plots: [best_hyperparameters]
+
+# Select plots and configure them separately
+plots: [best_hyperparameters, sensitivity]
+plot_params:
   best_hyperparameters:
     top_n: 5
-
-# Only sensitivity, default options
-plots: [sensitivity]
+  sensitivity:
+    average_over: [seed]
 ```
 
-When `plots` is omitted, all plots are enabled with default settings. If a plot is incompatible with the current sweep (e.g. `sensitivity` on a random sweep), a warning is logged and the plot is skipped without error.
+When `plots` is omitted, all plots are enabled with default settings. `plot_params` can be provided on its own to configure plots without changing which ones are enabled. If a plot is incompatible with the current sweep (e.g. `sensitivity` on a random sweep), a warning is logged and the plot is skipped without error.
 
 ---
 
@@ -40,7 +43,7 @@ Parameters that are constant across all trials are automatically hidden. Values 
 ### Example
 
 ```yaml
-plots:
+plot_params:
   best_hyperparameters:
     top_n: 20
 ```
@@ -68,7 +71,7 @@ The plot includes dropdowns for selecting the metric and split dimensions, and t
 ### Example
 
 ```yaml
-plots:
+plot_params:
   sensitivity:
     average_over: [seed, replicate]
     hue: [model_size]

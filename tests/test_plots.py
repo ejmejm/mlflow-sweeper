@@ -111,7 +111,7 @@ def test_best_hyperparameters_top_n(sweep_harness: SweepHarness) -> None:
         parameters={"x": [1, 2, 3, 4]},
         command=_log_metric_command(sweep_harness),
         spec={"metric": "loss", "direction": "minimize"},
-        plots={"best_hyperparameters": {"top_n": 2}},
+        plot_params={"best_hyperparameters": {"top_n": 2}},
     )
 
     sweep_harness.run_cli(config_path, "--log-params")
@@ -126,7 +126,7 @@ def test_sensitivity_average_over_config(sweep_harness: SweepHarness) -> None:
         parameters={"x": [1, 2], "replicate": [0, 1]},
         command=_log_metric_command(sweep_harness),
         spec={"metric": "loss", "direction": "minimize"},
-        plots={"sensitivity": {"average_over": ["replicate"]}},
+        plot_params={"sensitivity": {"average_over": ["replicate"]}},
     )
 
     sweep_harness.run_cli(config_path, "--log-params")
@@ -141,7 +141,7 @@ def test_sensitivity_hue_config(sweep_harness: SweepHarness) -> None:
         parameters={"x": [1, 2], "y": [10, 20], "z": [100, 200]},
         command=_log_metric_command(sweep_harness),
         spec={"metric": "loss", "direction": "minimize"},
-        plots={"sensitivity": {"hue": ["y"]}},
+        plot_params={"sensitivity": {"hue": ["y"]}},
     )
 
     sweep_harness.run_cli(config_path, "--log-params")
@@ -156,7 +156,7 @@ def test_sensitivity_multiple_metrics(sweep_harness: SweepHarness) -> None:
         parameters={"x": [1, 2], "y": [10, 20]},
         command=_log_metric_command(sweep_harness),
         spec={"metric": "loss", "direction": "minimize"},
-        plots={"sensitivity": {"metrics": ["loss", "accuracy"]}},
+        plot_params={"sensitivity": {"metrics": ["loss", "accuracy"]}},
     )
 
     sweep_harness.run_cli(config_path, "--log-params")
@@ -171,7 +171,7 @@ def test_sensitivity_split_by(sweep_harness: SweepHarness) -> None:
         parameters={"x": [1, 2], "model_size": ["small", "large"]},
         command=_log_metric_command(sweep_harness),
         spec={"metric": "loss", "direction": "minimize"},
-        plots={"sensitivity": {"split_by": ["model_size"]}},
+        plot_params={"sensitivity": {"split_by": ["model_size"]}},
     )
 
     sweep_harness.run_cli(config_path, "--log-params")
@@ -212,13 +212,14 @@ def test_plots_disabled_via_list(sweep_harness: SweepHarness) -> None:
     assert "plots/sensitivity.html" not in artifacts
 
 
-def test_plots_disabled_via_dict(sweep_harness: SweepHarness) -> None:
-    """Only plots keyed in the dict are generated."""
+def test_plots_list_with_plot_params(sweep_harness: SweepHarness) -> None:
+    """plots list selects which to generate, plot_params provides options."""
     config_path = sweep_harness.write_config(
         parameters={"x": [1, 2], "y": [10, 20]},
         command=_log_metric_command(sweep_harness),
         spec={"metric": "loss", "direction": "minimize"},
-        plots={"sensitivity": {}},
+        plots=["sensitivity"],
+        plot_params={"sensitivity": {"average_over": []}},
     )
 
     sweep_harness.run_cli(config_path, "--log-params")
