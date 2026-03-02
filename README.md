@@ -1,4 +1,4 @@
-# mlflow-sweeper
+# MLFlow Sweeper
 
 This module runs parameter sweeps (currently grid search) by executing a user-provided command for each trial and logging results to MLflow. It uses Optuna to enumerate/coordinate trials and supports both single-agent runs and multi-agent/distributed execution against shared storages.
 
@@ -56,22 +56,23 @@ mlflow-sweep path/to/sweep.yaml --delete
 ```yaml
 experiment: "my-experiment"
 sweep_name: "lr_bs_grid"
+optuna_storage: "sqlite:///optuna.db"
+mlflow_storage: "sqlite:///mlruns.db"
+output_dir: "./sweeps"
+
 command: "python train.py"
 algorithm: "grid"
+
+spec:
+  direction: "maximize"   # or "minimize"
+  metric: "val/accuracy"
 
 parameters:
   lr: [1e-3, 1e-4]
   batch_size: [32, 64]
   seed: 0
 
-optuna_storage: "sqlite:///optuna.db"
-mlflow_storage: "sqlite:///mlruns.db"
-output_dir: "./sweeps"
-
 # Optional optimization spec (used to return a metric to Optuna)
-spec:
-  direction: "maximize"   # or "minimize"
-  metric: "val/accuracy"
 ```
 
 The sweep runner appends parameters to `command` as `name=value` tokens and executes the resulting command for each trial, nesting each trial as a child MLflow run under a single parent run for the sweep.
@@ -121,6 +122,35 @@ parameters:
     step: 0.1      # optional; required if converting to a grid internally
     log: false     # optional (default false)
 ```
+
+## Plots
+
+When a sweep completes and a `spec.metric` is configured, mlflow-sweeper automatically generates interactive plots and logs them as MLflow artifacts on the parent run. Use `--no-plots` to skip plot generation entirely. Plots require parameter logging to be generated. If your experiment script does not log parameters (i.e. `mlflow.log_params(...)`), you can use the `--log-params` flag to have the sweeper log the parameters for you.
+
+There are two built-in plots:
+
+- **`best_hyperparameters`** -- a ranked table of trials sorted by metric value. Works with any algorithm.
+- **`sensitivity`** -- an interactive line chart showing how each parameter affects the metric. Only supported for grid sweeps.
+
+By default, all compatible plots are generated. If a plot is not compatible with the current sweep (e.g. sensitivity on a random sweep), a warning is logged and the plot is skipped.
+
+### Selecting which plots to generate
+
+Use the `plots` key in your config to control which plots are generated. You can pass a list of names for default settings, or a dict to also provide per-plot options:
+
+```yaml
+# List form: only generate the listed plots with default settings
+plots: [best_hyperparameters]
+
+# Dict form: only generate the listed plots, with custom options
+plots:
+  best_hyperparameters:
+    top_n: 10
+  sensitivity:
+    average_over: [seed]
+```
+
+If `plots` is omitted entirely, all plots are enabled with default settings. See [docs/plots.md](docs/plots.md) for the full reference of available options for each plot.
 
 ## TODO (moved from code)
 
