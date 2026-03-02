@@ -45,6 +45,7 @@ def main() -> None:
             pass
 
     mlflow.log_metric("loss", metric_value)
+    mlflow.log_metric("accuracy", 1.0 / (1.0 + metric_value))
     mlflow.end_run()
 
 
