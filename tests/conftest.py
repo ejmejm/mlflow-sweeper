@@ -40,7 +40,7 @@ class SweepHarness:
         command: str | None = None,
         spec: dict[str, Any] | None = None,
         algorithm: str = "grid",
-        plots: dict[str, Any] | None = None,
+        plots: dict[str, Any] | list[str] | None = None,
     ) -> str:
         """Write a sweep YAML config and return its path."""
         if command is None:

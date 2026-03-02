@@ -7,15 +7,18 @@ This module is intentionally limited to:
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, ListConfig, OmegaConf
 import optuna
 from optuna.study import StudyDirection
 
+
+logger = logging.getLogger(__name__)
 
 CONFIG_REQUIRED_FIELDS = [
     "experiment",
@@ -226,10 +229,20 @@ class SensitivityPlotConfig:
         return cls(**kwargs)
 
 
+ALL_PLOT_NAMES = {"best_hyperparameters", "sensitivity"}
+
+
 @dataclass
 class PlotsConfig:
-    """Config for post-sweep plot generation."""
+    """Config for post-sweep plot generation.
 
+    The ``plots`` YAML key accepts either a list of plot names (all defaults)
+    or a dict whose keys select which plots to generate and whose values
+    provide per-plot options.  When the key is omitted entirely, every plot
+    is enabled with default settings.
+    """
+
+    enabled_plots: list[str] = field(default_factory=lambda: sorted(ALL_PLOT_NAMES))
     best_hyperparameters: BestHyperparametersPlotConfig = field(
         default_factory=BestHyperparametersPlotConfig,
     )
@@ -241,7 +254,26 @@ class PlotsConfig:
     def from_dict_config(cls, config: DictConfig | None) -> "PlotsConfig":
         if config is None:
             return cls()
+
+        # List form: plots: [best_hyperparameters, sensitivity]
+        if isinstance(config, (list, ListConfig)):
+            enabled = []
+            for name in config:
+                if name not in ALL_PLOT_NAMES:
+                    logger.warning("Unknown plot name '%s'; ignoring.", name)
+                elif name not in enabled:
+                    enabled.append(name)
+            return cls(enabled_plots=enabled)
+
+        # Dict form: plots: {best_hyperparameters: {top_n: 10}, ...}
+        enabled = []
+        for key in config:
+            if key not in ALL_PLOT_NAMES:
+                logger.warning("Unknown plot name '%s'; ignoring.", key)
+            elif key not in enabled:
+                enabled.append(key)
         return cls(
+            enabled_plots=enabled,
             best_hyperparameters=BestHyperparametersPlotConfig.from_dict_config(
                 config.get("best_hyperparameters"),
             ),

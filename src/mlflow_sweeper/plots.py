@@ -9,6 +9,7 @@ from __future__ import annotations
 import itertools
 import json
 import logging
+import math
 from typing import TYPE_CHECKING
 
 import mlflow
@@ -36,12 +37,29 @@ def generate_plots(study: optuna.Study, config: SweepConfig) -> None:
         return
 
     plots_config = config.plots
-    plot_best_hyperparameters(study, config, plots_config.best_hyperparameters)
 
-    # Sensitivity plots require controlled experiments (all other params held constant
-    # while one varies), which is only meaningful for grid sweeps.
-    if config.algorithm == "grid":
-        plot_sensitivity(study, config, plots_config.sensitivity)
+    if "best_hyperparameters" in plots_config.enabled_plots:
+        try:
+            plot_best_hyperparameters(study, config, plots_config.best_hyperparameters)
+        except Exception:
+            logger.warning("Failed to generate best_hyperparameters plot.", exc_info=True)
+    else:
+        logger.info("best_hyperparameters plot disabled; skipping.")
+
+    if "sensitivity" in plots_config.enabled_plots:
+        if config.algorithm != "grid":
+            logger.warning(
+                "Sensitivity plot is only supported for grid sweeps "
+                "(current algorithm: '%s'); skipping.",
+                config.algorithm,
+            )
+        else:
+            try:
+                plot_sensitivity(study, config, plots_config.sensitivity)
+            except Exception:
+                logger.warning("Failed to generate sensitivity plot.", exc_info=True)
+    else:
+        logger.info("sensitivity plot disabled; skipping.")
 
 
 def _get_varying_param_names(config: SweepConfig) -> list[str]:
@@ -62,6 +80,49 @@ def _try_numeric(value: str) -> int | float | str:
             return float(value)
         except ValueError:
             return value
+
+
+_SUPERSCRIPT_MAP = str.maketrans(
+    "-0123456789",
+    "\u207b\u2070\u00b9\u00b2\u00b3\u2074\u2075\u2076\u2077\u2078\u2079",
+)
+
+
+def _is_power_of_2(value: object) -> bool:
+    """Check if a value is a positive power of 2 (including e.g. 0.25 = 2**-2)."""
+    try:
+        fval = float(value)
+    except (TypeError, ValueError):
+        return False
+    if fval <= 0:
+        return False
+    exp = math.log2(fval)
+    return abs(exp - round(exp)) < 1e-9
+
+
+def _format_power_of_2(value: object) -> str:
+    """Format a power-of-2 value as '2x' with Unicode superscripts."""
+    exp = round(math.log2(float(value)))
+    return "2" + str(exp).translate(_SUPERSCRIPT_MAP)
+
+
+def _detect_pow2_params(df: pd.DataFrame, param_names: list[str]) -> set[str]:
+    """Return param names where ALL non-null values are powers of 2."""
+    pow2_params: set[str] = set()
+    for name in param_names:
+        if name not in df.columns:
+            continue
+        values = df[name].dropna().unique()
+        if len(values) > 0 and all(_is_power_of_2(v) for v in values):
+            pow2_params.add(name)
+    return pow2_params
+
+
+def _fmt_val(value: object, param: str, pow2_params: set[str]) -> str:
+    """Format a parameter value, using power-of-2 notation if applicable."""
+    if param in pow2_params and _is_power_of_2(value):
+        return _format_power_of_2(value)
+    return str(value)
 
 
 def _trials_to_dataframe(
@@ -123,23 +184,41 @@ def _build_sensitivity_figure(
     metric_name: str,
     hue_params: list[str],
     best_trial: optuna.trial.FrozenTrial,
+    pow2_params: set[str] | None = None,
 ) -> go.Figure:
     """Build a single sensitivity figure for one (metric, split, tab) combination."""
+    pow2_params = pow2_params or set()
     group_cols = [x_param] + hue_params
     grouped = df.groupby(group_cols, as_index=False)[metric_name].mean()
 
     if hue_params:
         if len(hue_params) == 1:
+            hp = hue_params[0]
             grouped["_hue_label"] = (
-                hue_params[0] + "=" + grouped[hue_params[0]].astype(str)
+                hp + "=" + grouped[hp].apply(
+                    lambda v, _p=hp: _fmt_val(v, _p, pow2_params)
+                )
             )
         else:
             labels = []
             for _, row in grouped[hue_params].iterrows():
-                parts = [f"{p}={row[p]}" for p in hue_params]
+                parts = [
+                    f"{p}={_fmt_val(row[p], p, pow2_params)}" for p in hue_params
+                ]
                 labels.append(", ".join(parts))
             grouped["_hue_label"] = labels
-        hue_values = sorted(grouped["_hue_label"].unique())
+        # Sort hue labels by underlying numeric values, not formatted strings.
+        hue_rows = (
+            grouped[hue_params + ["_hue_label"]]
+            .drop_duplicates(subset=hue_params)
+            .to_dict("records")
+        )
+        hue_rows.sort(
+            key=lambda r: tuple(
+                (isinstance(r[p], str), r[p]) for p in hue_params
+            ),
+        )
+        hue_values = [r["_hue_label"] for r in hue_rows]
     else:
         grouped["_hue_label"] = ""
         hue_values = [""]
@@ -173,7 +252,7 @@ def _build_sensitivity_figure(
         xaxis=dict(
             title=x_param,
             tickvals=x_positions,
-            ticktext=[str(v) for v in x_values],
+            ticktext=[_fmt_val(v, x_param, pow2_params) for v in x_values],
         ),
         yaxis=dict(title=metric_name),
         margin=dict(l=60, r=20, t=20, b=60),
@@ -186,7 +265,7 @@ def _build_sensitivity_figure(
             line_dash="dash",
             line_color="green",
             line_width=2,
-            annotation_text=f"best ({best_x_value})",
+            annotation_text=f"best ({_fmt_val(best_x_value, x_param, pow2_params)})",
             annotation_font_color="green",
         )
 
@@ -367,6 +446,14 @@ def plot_best_hyperparameters(
     constant = [c for c in param_cols if df[c].nunique(dropna=False) <= 1]
     df = df.drop(columns=constant)
 
+    # Format power-of-2 parameters for display.
+    pow2_params = _detect_pow2_params(df, list(config.param_specs.keys()))
+    for col in pow2_params:
+        if col in df.columns:
+            df[col] = df[col].apply(
+                lambda v: _format_power_of_2(v) if _is_power_of_2(v) else v
+            )
+
     df.insert(0, "rank", range(1, len(df) + 1))
 
     fig = go.Figure(data=[go.Table(
@@ -429,6 +516,7 @@ def plot_sensitivity(
         return
 
     best_trial = study.best_trial
+    pow2_params = _detect_pow2_params(df, varying_params)
 
     split_values: dict[str, list] = {}
     for param in split_by:
@@ -457,6 +545,7 @@ def plot_sensitivity(
 
                 figures[key] = _build_sensitivity_figure(
                     sub_df, tab_param, metric, hue_params, best_trial,
+                    pow2_params,
                 )
 
     if not figures:
@@ -465,7 +554,10 @@ def plot_sensitivity(
     dims: list[tuple[str, list[str]]] = []
     dims.append(("Metric", metric_names))
     for param in split_by:
-        dims.append((param, [str(v) for v in split_values[param]]))
+        dims.append((
+            param,
+            [_fmt_val(v, param, pow2_params) for v in split_values[param]],
+        ))
     dims.append(("Parameter", tab_params))
 
     html = _build_sensitivity_html(

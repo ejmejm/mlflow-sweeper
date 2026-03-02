@@ -194,3 +194,53 @@ def test_random_sweep_with_metric_generates_table_only(sweep_harness: SweepHarne
     artifacts = _list_plot_artifacts(sweep_harness)
     assert "plots/best_hyperparameters.html" in artifacts
     assert "plots/sensitivity.html" not in artifacts
+
+
+def test_plots_disabled_via_list(sweep_harness: SweepHarness) -> None:
+    """Only plots listed in the config are generated."""
+    config_path = sweep_harness.write_config(
+        parameters={"x": [1, 2], "y": [10, 20]},
+        command=_log_metric_command(sweep_harness),
+        spec={"metric": "loss", "direction": "minimize"},
+        plots=["best_hyperparameters"],
+    )
+
+    sweep_harness.run_cli(config_path, "--log-params")
+
+    artifacts = _list_plot_artifacts(sweep_harness)
+    assert "plots/best_hyperparameters.html" in artifacts
+    assert "plots/sensitivity.html" not in artifacts
+
+
+def test_plots_disabled_via_dict(sweep_harness: SweepHarness) -> None:
+    """Only plots keyed in the dict are generated."""
+    config_path = sweep_harness.write_config(
+        parameters={"x": [1, 2], "y": [10, 20]},
+        command=_log_metric_command(sweep_harness),
+        spec={"metric": "loss", "direction": "minimize"},
+        plots={"sensitivity": {}},
+    )
+
+    sweep_harness.run_cli(config_path, "--log-params")
+
+    artifacts = _list_plot_artifacts(sweep_harness)
+    assert "plots/best_hyperparameters.html" not in artifacts
+    assert "plots/sensitivity.html" in artifacts
+
+
+def test_sensitivity_on_random_sweep_warns_but_succeeds(sweep_harness: SweepHarness) -> None:
+    """Enabling sensitivity on a random sweep warns but does not error."""
+    config_path = sweep_harness.write_config(
+        parameters={"x": [1, 2, 3], "y": [10, 20, 30]},
+        command=_log_metric_command(sweep_harness),
+        spec={"metric": "loss", "direction": "minimize", "n_runs": 4},
+        algorithm="random",
+        plots=["best_hyperparameters", "sensitivity"],
+    )
+
+    # Should succeed (no error), sensitivity just gets skipped with a warning.
+    sweep_harness.run_cli(config_path, "--log-params")
+
+    artifacts = _list_plot_artifacts(sweep_harness)
+    assert "plots/best_hyperparameters.html" in artifacts
+    assert "plots/sensitivity.html" not in artifacts
