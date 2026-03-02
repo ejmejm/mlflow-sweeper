@@ -54,7 +54,7 @@ def generate_plots(study: optuna.Study, config: SweepConfig) -> None:
             )
         else:
             try:
-                plot_sensitivity(study, config, plots_config)
+                plot_sensitivity(config, plots_config)
             except Exception:
                 logger.warning("Failed to generate sensitivity plot.", exc_info=True)
     else:
@@ -182,7 +182,6 @@ def _build_sensitivity_figure(
     x_param: str,
     metric_name: str,
     hue_params: list[str],
-    best_trial: optuna.trial.FrozenTrial,
     pow2_params: set[str] | None = None,
 ) -> go.Figure:
     """Build a single sensitivity figure for one (metric, split, tab) combination."""
@@ -256,17 +255,6 @@ def _build_sensitivity_figure(
         yaxis=dict(title=metric_name),
         margin=dict(l=60, r=20, t=20, b=60),
     )
-
-    best_x_value = best_trial.params.get(x_param)
-    if best_x_value is not None and best_x_value in x_map:
-        fig.add_vline(
-            x=x_map[best_x_value],
-            line_dash="dash",
-            line_color="green",
-            line_width=2,
-            annotation_text=f"best ({_fmt_val(best_x_value, x_param, pow2_params)})",
-            annotation_font_color="green",
-        )
 
     return fig
 
@@ -549,7 +537,6 @@ def plot_best_hyperparameters(
 
 
 def plot_sensitivity(
-    study: optuna.Study,
     config: SweepConfig,
     plots_config: PlotsConfig,
 ) -> None:
@@ -585,7 +572,6 @@ def plot_sensitivity(
         logger.info("No parameters to plot tabs for; skipping sensitivity plot.")
         return
 
-    best_trial = study.best_trial
     pow2_params = _detect_pow2_params(df, varying_params)
 
     split_values: dict[str, list] = {}
@@ -614,8 +600,7 @@ def plot_sensitivity(
                 key = "-".join(key_parts)
 
                 figures[key] = _build_sensitivity_figure(
-                    sub_df, tab_param, metric, hue_params, best_trial,
-                    pow2_params,
+                    sub_df, tab_param, metric, hue_params, pow2_params,
                 )
 
     if not figures:
