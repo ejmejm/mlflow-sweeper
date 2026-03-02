@@ -251,22 +251,24 @@ def plot_sensitivity(
     if average_over is None:
         average_over = [p for p in varying_params if p.lower() == "seed"]
 
-    # Determine which params get tabs
+    # Hue params: shown as separate lines, consistent across all tabs (default: none)
+    hue_params = plot_config.hue or []
+
+    # Determine which params get tabs (exclude average_over and hue)
     tab_params = plot_config.params
     if tab_params is None:
-        tab_params = [p for p in varying_params if p not in average_over]
+        excluded = set(average_over) | set(hue_params)
+        tab_params = [p for p in varying_params if p not in excluded]
 
     if not tab_params:
         logger.info("No parameters to plot tabs for; skipping sensitivity plot.")
         return
 
+    best_trial = study.best_trial
     tab_figures: dict[str, go.Figure] = {}
 
     for x_param in tab_params:
-        # The "hue" params are all varying params except x_param and average_over
-        hue_params = [p for p in varying_params if p != x_param and p not in average_over]
-
-        # Group by x_param + hue_params, averaging over average_over params
+        # Group by x_param + hue_params; everything else is averaged over
         group_cols = [x_param] + hue_params
         grouped = df.groupby(group_cols, as_index=False)[metric_name].mean()
 
@@ -326,6 +328,18 @@ def plot_sensitivity(
             yaxis=dict(title=metric_name),
             margin=dict(l=60, r=20, t=20, b=60),
         )
+
+        # Highlight the best trial's value for this param
+        best_x_value = best_trial.params.get(x_param)
+        if best_x_value is not None and best_x_value in x_map:
+            fig.add_vline(
+                x=x_map[best_x_value],
+                line_dash="dash",
+                line_color="green",
+                line_width=2,
+                annotation_text=f"best ({best_x_value})",
+                annotation_font_color="green",
+            )
 
         tab_figures[x_param] = fig
 

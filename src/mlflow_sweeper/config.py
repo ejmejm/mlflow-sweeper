@@ -204,6 +204,9 @@ class SensitivityPlotConfig:
 
     average_over: list[str] | None = None
     params: list[str] | None = None
+    hue: list[str] | None = None
+    metrics: list[str] | None = None
+    split_by: list[str] | None = None
 
     @classmethod
     def from_dict_config(cls, config: DictConfig | None) -> "SensitivityPlotConfig":
@@ -214,6 +217,12 @@ class SensitivityPlotConfig:
             kwargs["average_over"] = list(config.average_over)
         if "params" in config:
             kwargs["params"] = list(config.params)
+        if "hue" in config:
+            kwargs["hue"] = list(config.hue)
+        if "metrics" in config:
+            kwargs["metrics"] = list(config.metrics)
+        if "split_by" in config:
+            kwargs["split_by"] = list(config.split_by)
         return cls(**kwargs)
 
 
