@@ -40,6 +40,7 @@ class SweepHarness:
         command: str | None = None,
         spec: dict[str, Any] | None = None,
         algorithm: str = "grid",
+        plots: dict[str, Any] | None = None,
     ) -> str:
         """Write a sweep YAML config and return its path."""
         if command is None:
@@ -57,6 +58,8 @@ class SweepHarness:
         }
         if spec is not None:
             config["spec"] = spec
+        if plots is not None:
+            config["plots"] = plots
         OmegaConf.save(config=OmegaConf.create(config), f=config_path)
         return config_path
 

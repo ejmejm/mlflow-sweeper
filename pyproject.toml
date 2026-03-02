@@ -16,6 +16,7 @@ dependencies = [
   "numpy",
   "omegaconf",
   "optuna",
+  "plotly",
 ]
 
 [project.scripts]

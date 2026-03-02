@@ -8,7 +8,7 @@ This module is intentionally limited to:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
@@ -183,6 +183,66 @@ class SpecConfig:
 
 
 @dataclass
+class BestHyperparametersPlotConfig:
+    """Config for the best hyperparameters table plot."""
+
+    top_n: int | None = None
+
+    @classmethod
+    def from_dict_config(cls, config: DictConfig | None) -> "BestHyperparametersPlotConfig":
+        if config is None:
+            return cls()
+        kwargs: dict[str, Any] = {}
+        if "top_n" in config:
+            kwargs["top_n"] = config.top_n
+        return cls(**kwargs)
+
+
+@dataclass
+class SensitivityPlotConfig:
+    """Config for the hyperparameter sensitivity plot."""
+
+    average_over: list[str] | None = None
+    params: list[str] | None = None
+
+    @classmethod
+    def from_dict_config(cls, config: DictConfig | None) -> "SensitivityPlotConfig":
+        if config is None:
+            return cls()
+        kwargs: dict[str, Any] = {}
+        if "average_over" in config:
+            kwargs["average_over"] = list(config.average_over)
+        if "params" in config:
+            kwargs["params"] = list(config.params)
+        return cls(**kwargs)
+
+
+@dataclass
+class PlotsConfig:
+    """Config for post-sweep plot generation."""
+
+    best_hyperparameters: BestHyperparametersPlotConfig = field(
+        default_factory=BestHyperparametersPlotConfig,
+    )
+    sensitivity: SensitivityPlotConfig = field(
+        default_factory=SensitivityPlotConfig,
+    )
+
+    @classmethod
+    def from_dict_config(cls, config: DictConfig | None) -> "PlotsConfig":
+        if config is None:
+            return cls()
+        return cls(
+            best_hyperparameters=BestHyperparametersPlotConfig.from_dict_config(
+                config.get("best_hyperparameters"),
+            ),
+            sensitivity=SensitivityPlotConfig.from_dict_config(
+                config.get("sensitivity"),
+            ),
+        )
+
+
+@dataclass
 class SweepConfig:
     """Parsed and validated sweep configuration."""
 
@@ -197,8 +257,9 @@ class SweepConfig:
     param_specs: dict[str, ParamSpec]
     spec: SpecConfig
 
-    # Optional spec (contains direction, max_retry, metric)
+    # Optional fields
     output_dir: str = "output"
+    plots: PlotsConfig = field(default_factory=PlotsConfig)
 
     @classmethod
     def from_dict_config(cls, config: DictConfig) -> "SweepConfig":
@@ -218,7 +279,7 @@ class SweepConfig:
         # Convert parameters to dict
         params = OmegaConf.to_container(config.parameters, throw_on_missing=True)
         assert isinstance(params, dict)
-        
+
         kwargs = {}
         if "output_dir" in config:
             kwargs["output_dir"] = config.output_dir
@@ -233,6 +294,7 @@ class SweepConfig:
             parameters = params,
             param_specs = config_params_to_spec_dict(config.parameters),
             spec = SpecConfig.from_dict_config(config.get("spec")),
+            plots = PlotsConfig.from_dict_config(config.get("plots")),
             **kwargs,
         )
 

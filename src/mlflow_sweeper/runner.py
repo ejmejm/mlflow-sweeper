@@ -20,9 +20,10 @@ from omegaconf import OmegaConf
 import optuna
 
 from mlflow_sweeper.config import ParamSpec, SweepConfig
+from mlflow_sweeper.optimize import optimize_study
+from mlflow_sweeper.plots import generate_plots
 from mlflow_sweeper.samplers.grid import GridSampler
 from mlflow_sweeper.samplers.random import RandomSampler
-from mlflow_sweeper.optimize import optimize_study
 
 
 logger = logging.getLogger(__name__)
@@ -106,6 +107,12 @@ def parse_args() -> argparse.Namespace:
             "Disabled by default so that the subprocess can log its own resolved "
             "parameter values without hitting MLflow's param-immutability restriction."
         ),
+    )
+    parser.add_argument(
+        "--no-plots",
+        action = "store_true",
+        default = False,
+        help = "Disable automatic plot generation after sweep completion.",
     )
     return parser.parse_args()
 
@@ -367,6 +374,8 @@ def run_sweep(args: argparse.Namespace, config: SweepConfig) -> None:
     
     if check_study_is_complete(study):
         logger.info("Study is complete. No more trials to run.")
+        if not args.no_plots:
+            generate_plots(study, config)
         return
 
     logger.info("Running sweep: %s/%s", config.experiment, config.sweep_name)
@@ -393,6 +402,8 @@ def run_sweep(args: argparse.Namespace, config: SweepConfig) -> None:
         raise e
     finally:
         if check_study_is_complete(study):
+            if not args.no_plots:
+                generate_plots(study, config)
             mlflow.end_run(RunStatus.to_string(RunStatus.FINISHED))
         else:
             mlflow.end_run(RunStatus.to_string(RunStatus.RUNNING))
