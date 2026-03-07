@@ -8,6 +8,7 @@ Code is split into:
 from __future__ import annotations
 
 import logging
+import sys
 
 from mlflow_sweeper.config import load_configs, SweepConfig
 from mlflow_sweeper.runner import delete_sweep, parse_args, run_sweep
@@ -36,9 +37,9 @@ logger = logging.getLogger(__name__)
 
 def configure_logging() -> None:
     """Configure colored, human-friendly logging."""
-    handler = logging.StreamHandler()
+    handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(ColorFormatter("%(levelname)s: %(message)s"))
-    logging.basicConfig(level=logging.INFO, handlers=[handler])
+    logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
 
 
 def main() -> None:

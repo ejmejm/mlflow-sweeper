@@ -9,6 +9,7 @@ import logging
 import os
 import signal
 import subprocess
+import sys
 import time
 from typing import Any
 
@@ -250,7 +251,7 @@ def run_experiment(
         if proc.stdout is not None:
             for line in proc.stdout:
                 output_lines.append(line)
-                print(f"{faded}{line}{reset}", end="")
+                print(f"{faded}{line}{reset}", end="", flush=True)
 
         proc.wait()
         logger.info(f"Trial run {trial_run_id} finished with exit code {proc.returncode}.")
