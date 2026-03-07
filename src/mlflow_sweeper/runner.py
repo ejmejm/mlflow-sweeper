@@ -160,19 +160,27 @@ def _mlflow_db_lock_path(config: SweepConfig) -> str:
     return os.path.join(get_lock_dir(config), f"mlflow_db_{lock_id}.lock")
 
 
-def init_study(config: SweepConfig) -> optuna.Study:
+def init_study(config: SweepConfig, max_retries: int = 4, retry_delay: float = 4.0) -> optuna.Study:
     """Initialize (or load) an Optuna study for this sweep."""
     study_name = get_study_name(config)
 
-    with FileLock(_optuna_study_lock_path(config)):
-        study = optuna.create_study(
-            study_name = study_name,
-            sampler = make_sampler(config),
-            storage = config.optuna_storage,
-            direction = config.spec.direction,
-            load_if_exists = True,
-        )
-    return study
+    for attempt in range(max_retries):
+        try:
+            with FileLock(_optuna_study_lock_path(config)):
+                study = optuna.create_study(
+                    study_name = study_name,
+                    sampler = make_sampler(config),
+                    storage = config.optuna_storage,
+                    direction = config.spec.direction,
+                    load_if_exists = True,
+                )
+            return study
+        except Exception as e:
+            if "already exists" in str(e) and attempt < max_retries - 1:
+                logger.warning(f"Database conflict on attempt {attempt + 1}, retrying in {retry_delay}s...")
+                time.sleep(retry_delay)
+            else:
+                raise
 
 
 def check_study_is_complete(study: optuna.Study) -> bool:
