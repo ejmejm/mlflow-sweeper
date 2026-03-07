@@ -41,6 +41,14 @@ def configure_logging() -> None:
     handler.setFormatter(ColorFormatter("%(levelname)s: %(message)s"))
     logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
 
+    # Redirect Optuna's logger (which uses its own handler) to stdout with our formatting.
+    optuna_handler = logging.StreamHandler(sys.stdout)
+    optuna_handler.setFormatter(ColorFormatter("%(levelname)s: %(message)s"))
+    optuna_logger = logging.getLogger("optuna")
+    optuna_logger.handlers.clear()
+    optuna_logger.addHandler(optuna_handler)
+    optuna_logger.propagate = False
+
 
 def main() -> None:
     """CLI entrypoint."""
