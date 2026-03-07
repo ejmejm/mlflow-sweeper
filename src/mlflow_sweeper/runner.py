@@ -454,6 +454,16 @@ def delete_sweep(config: SweepConfig) -> None:
         experiment_ids = [experiment.experiment_id],
         filter_string = f'tags.sweep_name = "{config.sweep_name}"',
     )
+    # Also find child runs of each sweep run so they get deleted too.
+    child_runs = []
     for run in runs:
+        child_runs.extend(mlflow_client.search_runs(
+            experiment_ids = [experiment.experiment_id],
+            filter_string = f'tags.mlflow.parentRunId = "{run.info.run_id}"',
+        ))
+    seen = {run.info.run_id for run in runs}
+    child_runs = [r for r in child_runs if r.info.run_id not in seen]
+    all_runs = list(runs) + child_runs
+    for run in all_runs:
         mlflow_client.delete_run(run.info.run_id)
-    logger.info("Deleted %s associated MLflow runs.", len(runs))
+    logger.info("Deleted %s associated MLflow runs (%s child runs).", len(runs), len(child_runs))
