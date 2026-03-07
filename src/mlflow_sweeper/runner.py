@@ -10,6 +10,7 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from typing import Any
 
@@ -284,6 +285,12 @@ def run_experiment(
         raise
 
     finally:
+        if output_lines:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                log_path = os.path.join(tmpdir, "stdout.log")
+                with open(log_path, "w") as f:
+                    f.writelines(output_lines)
+                mlflow.log_artifact(log_path)
         mlflow.end_run(RunStatus.to_string(state))
 
     if config.spec.metric is None:
