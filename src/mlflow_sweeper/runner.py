@@ -393,6 +393,7 @@ def run_sweep(args: argparse.Namespace, config: SweepConfig) -> None:
         logger.info("Study is complete. No more trials to run.")
         if not args.no_plots:
             generate_plots(study, config)
+        mlflow.end_run()
         return
 
     logger.info("Running sweep: %s/%s", config.experiment, config.sweep_name)
