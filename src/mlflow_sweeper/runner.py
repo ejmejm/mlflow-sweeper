@@ -204,6 +204,7 @@ def run_experiment(
     config: SweepConfig,
     mlflow_client: MlflowClient,
     args: argparse.Namespace,
+    parent_run_id: str = "",
 ) -> float:
     """Run a single trial as a subprocess and log it under MLflow."""
     param_values = get_param_values_for_trial(trial, config.param_specs)
@@ -215,9 +216,15 @@ def run_experiment(
     if active is not None:
         logger.debug("Active MLflow run: %s.", active.info.run_id)
 
+    # Use explicit parent tag instead of nested=True, because with n_jobs > 1
+    # the parent run's thread-local active run context is not visible in worker
+    # threads, causing nested=True to create top-level runs instead.
     trial_run = mlflow.start_run(
-        tags = {"sweep_name": config.sweep_name},
-        nested = True,
+        experiment_id = mlflow.get_experiment_by_name(config.experiment).experiment_id,
+        tags = {
+            "sweep_name": config.sweep_name,
+            "mlflow.parentRunId": parent_run_id,
+        },
     )
     trial_run_id = trial_run.info.run_id
     trial.set_user_attr('mlflow_run_id', trial_run_id)
@@ -396,6 +403,7 @@ def run_sweep(args: argparse.Namespace, config: SweepConfig) -> None:
         mlflow.end_run()
         return
 
+    parent_run_id = mlflow.active_run().info.run_id
     logger.info("Running sweep: %s/%s", config.experiment, config.sweep_name)
 
     structured_config = OmegaConf.structured(config)
@@ -419,6 +427,7 @@ def run_sweep(args: argparse.Namespace, config: SweepConfig) -> None:
         config = config,
         mlflow_client = mlflow_client,
         args = args,
+        parent_run_id = parent_run_id,
     )
     
     # Update the status of the parent MLFlow run based on the status of the Optuna study.
