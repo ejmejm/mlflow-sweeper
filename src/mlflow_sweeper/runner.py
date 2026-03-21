@@ -429,23 +429,40 @@ def run_sweep(args: argparse.Namespace, config: SweepConfig) -> None:
         args = args,
         parent_run_id = parent_run_id,
     )
-    
+
+    # Remove the parent run from the thread-local active run stack so that
+    # child runs can call mlflow.start_run() without nested=True.  The parent
+    # run stays alive on the server; we manage its terminal status explicitly
+    # via mlflow_client.set_terminated().  In parallel mode (-j N) worker
+    # threads never see the parent on their stacks, so this is a no-op there.
+    _stack = mlflow.tracking.fluent._active_run_stack
+    _stack.set([r for r in _stack.get() if r.info.run_id != parent_run_id])
+
     # Update the status of the parent MLFlow run based on the status of the Optuna study.
     try:
         optimize_study(study, run_fn, n_trials=args.n_trials, n_jobs=args.n_jobs, catch=(TrialRunError,))
     except KeyboardInterrupt as e:
-        mlflow.end_run(RunStatus.to_string(RunStatus.KILLED))
+        mlflow_client.set_terminated(parent_run_id, RunStatus.to_string(RunStatus.KILLED))
         raise e
     except Exception as e:
-        mlflow.end_run(RunStatus.to_string(RunStatus.FAILED))
+        mlflow_client.set_terminated(parent_run_id, RunStatus.to_string(RunStatus.FAILED))
         raise e
     finally:
         if check_study_is_complete(study):
             if not args.no_plots:
-                generate_plots(study, config)
-            mlflow.end_run(RunStatus.to_string(RunStatus.FINISHED))
+                # Re-activate the parent run: it was removed from the active
+                # run stack (line ~438) so child trials could call
+                # mlflow.start_run() without nested=True.  generate_plots
+                # needs an active run for mlflow.active_run() and artifact
+                # logging, so we resume it here.
+                mlflow.start_run(run_id=parent_run_id)
+                try:
+                    generate_plots(study, config)
+                finally:
+                    mlflow.end_run()
+            mlflow_client.set_terminated(parent_run_id, RunStatus.to_string(RunStatus.FINISHED))
         else:
-            mlflow.end_run(RunStatus.to_string(RunStatus.RUNNING))
+            mlflow_client.set_terminated(parent_run_id, RunStatus.to_string(RunStatus.RUNNING))
 
     logger.info("Sweep %s completed.", config.sweep_name)
 
