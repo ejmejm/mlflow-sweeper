@@ -197,6 +197,7 @@ def test_changed_config_errors_with_clear_message(sweep_harness: SweepHarness) -
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=False)
     assert proc.returncode != 0, "Expected failure when config has changed"
     assert "changed since the last run" in proc.stdout
+    assert "--update-params" in proc.stdout
 
 
 def test_resumed_sweep_retries_failed_runs(sweep_harness: SweepHarness) -> None:

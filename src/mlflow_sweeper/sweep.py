@@ -64,6 +64,10 @@ def main() -> None:
         logger.info(f"Validating config: {config_path}")
         sweep_configs.append(SweepConfig.from_dict_config(dict_config))
 
+    if args.delete and args.update_params:
+        logger.error("--delete and --update-params are mutually exclusive.")
+        raise SystemExit(1)
+
     if args.delete:
         for config in sweep_configs:
             logger.info("Deleting sweep: %s/%s...", config.experiment, config.sweep_name)
