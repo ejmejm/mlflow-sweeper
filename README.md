@@ -51,6 +51,21 @@ Note: coordination relies on file locks in `output_dir`, so for true multi-host 
 mlflow-sweep path/to/sweep.yaml --delete
 ```
 
+### View sweep results
+
+After sweeps finish, quickly inspect results from the terminal without opening the MLflow UI:
+
+```bash
+# Show all sweeps in an experiment (sorted by accuracy descending)
+mlflow-sweep-results my-experiment
+
+# Filter to a specific sweep
+mlflow-sweep-results my-experiment -s lr_sweep
+
+# Sort by a specific metric, show top 5
+mlflow-sweep-results my-experiment -m loss --ascending -n 5
+```
+
 ## Config format (minimal example)
 
 ```yaml

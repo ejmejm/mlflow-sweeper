@@ -21,6 +21,7 @@ dependencies = [
 
 [project.scripts]
 mlflow-sweep = "mlflow_sweeper.sweep:main"
+mlflow-sweep-results = "mlflow_sweeper.results:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

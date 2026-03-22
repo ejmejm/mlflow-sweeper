@@ -23,6 +23,7 @@ output/
 .DS_Store
 .idea/
 .vscode/
+CLAUDE.md
 
 ## MLflow / Optuna / sweep artifacts (common defaults)
 mlruns/
