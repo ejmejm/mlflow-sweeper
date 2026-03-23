@@ -552,12 +552,15 @@ def run_sweep(args: argparse.Namespace, config: SweepConfig) -> None:
 
     # Detect config changes by attempting to log params on the parent run.
     # MLflow's param immutability will raise if values differ.
+    # Only track fields that affect experiment execution — exclude display-only
+    # fields like plots/plot_params so changing them doesn't require a re-sweep.
     structured_config = OmegaConf.structured(config)
     dict_config = OmegaConf.to_container(structured_config, throw_on_missing=True)
+    tracked_config = {k: v for k, v in dict_config.items() if k not in ('plots', 'param_specs')}
 
     config_changed = False
     try:
-        mlflow.log_params(dict_config)
+        mlflow.log_params(tracked_config)
     except MlflowException as e:
         if "Changing param values is not allowed" not in str(e):
             raise
@@ -590,7 +593,7 @@ def run_sweep(args: argparse.Namespace, config: SweepConfig) -> None:
         _reparent_mlflow_runs(mlflow_client, config, old_parent_run_id, parent_run_id)
 
         # Log new config on the fresh parent.
-        mlflow.log_params(dict_config)
+        mlflow.log_params(tracked_config)
 
         logger.info("Param update complete.")
         mlflow_client.set_terminated(parent_run_id, RunStatus.to_string(RunStatus.RUNNING))
