@@ -154,20 +154,6 @@ run_sweep(
 )
 ```
 
-### Updating parameters
-
-If you change your sweep's parameters between runs, `run_sweep` will detect the change and abort with an error by default. Pass `allow_param_change=True` to migrate valid trials from the old config and continue running:
-
-```python
-# First run
-run_sweep(config_v1, train, n_jobs=4)
-
-# Later, with expanded parameters
-run_sweep(config_v2, train, n_jobs=4, allow_param_change=True)
-```
-
-Trials whose parameters are still valid under the new config are kept; incompatible trials are dropped from the Optuna study (but remain visible in MLflow). If the config hasn't actually changed, a warning is logged and the sweep proceeds normally.
-
 ## Config format (minimal example)
 
 ```yaml
@@ -271,6 +257,24 @@ plot_params:
 ```
 
 If `plots` is omitted entirely, all plots are enabled with default settings. See [docs/plots.md](docs/plots.md) for the full reference of available options for each plot.
+
+## Updating parameters on an existing sweep
+
+If you change your sweep's parameters between runs, mlflow-sweeper will detect the mismatch and abort with an error by default. To update in-place, pass the allow-param-change flag — valid trials from the old config are migrated and the sweep continues running with the new parameters:
+
+**CLI:**
+
+```bash
+mlflow-sweep path/to/sweep.yaml --allow-param-change
+```
+
+**Python API:**
+
+```python
+run_sweep(config_v2, train, n_jobs=4, allow_param_change=True)
+```
+
+Trials whose parameters are still valid under the new config are kept; incompatible trials are dropped from the Optuna study (but remain visible in MLflow). If the config hasn't actually changed, a warning is logged and the sweep proceeds normally.
 
 ## TODO (moved from code)
 
