@@ -74,8 +74,7 @@ Instead of defining a `command` that spawns a subprocess for each trial, you can
 
 ```python
 from omegaconf import OmegaConf
-from mlflow_sweeper.config import SweepConfig
-from mlflow_sweeper.runner import run_sweep
+from mlflow_sweeper import SweepConfig, run_sweep
 
 config = SweepConfig.from_dict_config(OmegaConf.create({
     "experiment": "my-experiment",
