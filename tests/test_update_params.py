@@ -1,4 +1,4 @@
-"""Integration tests for the --update-params feature."""
+"""Integration tests for the --allow-param-change feature."""
 
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ from tests.conftest import SweepHarness
 from tests.helpers import _assert_parent_and_get_trial_runs, _trial_param
 
 
-def test_error_message_hints_update_params(sweep_harness: SweepHarness) -> None:
-    """Changed config error should mention --update-params."""
+def test_error_message_hints_allow_param_change(sweep_harness: SweepHarness) -> None:
+    """Changed config error should mention --allow-param-change."""
     config_path = sweep_harness.write_config(parameters={"x": [1, 2]})
     sweep_harness.run_cli(config_path)
 
@@ -21,11 +21,11 @@ def test_error_message_hints_update_params(sweep_harness: SweepHarness) -> None:
     cmd = [sys.executable, os.path.join(sweep_harness.repo_root, "sweep.py"), config_path]
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=False)
     assert proc.returncode != 0
-    assert "--update-params" in proc.stdout
+    assert "--allow-param-change" in proc.stdout
 
 
 def test_grid_expand_values(sweep_harness: SweepHarness) -> None:
-    """Expanding grid values should keep old runs and add new ones after a subsequent run."""
+    """Expanding grid values should keep old runs and add new ones in one call."""
     initial_params = {"color": ["red", "blue"], "shape": ["square"]}
     config_path = sweep_harness.write_config(parameters=initial_params)
     sweep_harness.run_cli(config_path)
@@ -35,19 +35,12 @@ def test_grid_expand_values(sweep_harness: SweepHarness) -> None:
     assert len(trial_runs_before) == 2
     old_trial_run_ids = {r.info.run_id for r in trial_runs_before}
 
-    # Expand the grid and migrate with --update-params (no new trials run).
+    # Expand the grid and migrate-then-run with --allow-param-change.
     expanded_params = {"color": ["red", "blue"], "shape": ["square", "circle"]}
     config_path = sweep_harness.write_config(parameters=expanded_params)
-    sweep_harness.run_cli(config_path, "--update-params")
+    sweep_harness.run_cli(config_path, "--allow-param-change")
 
-    # Still only 2 trial runs — migration doesn't run new trials.
-    trial_runs_mid = _assert_parent_and_get_trial_runs(harness=sweep_harness)
-    assert len(trial_runs_mid) == 2
-
-    # Now run the sweep normally to fill in the remaining trials.
-    sweep_harness.run_cli(config_path)
-
-    # Should now have 4 trial runs total (2 migrated + 2 new).
+    # After one call: migration + new trials = 4 trial runs total.
     trial_runs_after = _assert_parent_and_get_trial_runs(harness=sweep_harness)
     assert len(trial_runs_after) == 4
 
@@ -70,7 +63,7 @@ def test_grid_expand_with_atomic_params(sweep_harness: SweepHarness) -> None:
     trial_runs_before = _assert_parent_and_get_trial_runs(harness=sweep_harness)
     assert len(trial_runs_before) == 4  # 2 lr × 2 layers
 
-    # Expand lr with a new value.
+    # Expand lr with a new value — migrate + run new trials.
     expanded_params = {
         "fixed_flag": True,
         "fixed_name": "experiment_1",
@@ -78,15 +71,7 @@ def test_grid_expand_with_atomic_params(sweep_harness: SweepHarness) -> None:
         "layers": [2, 4],
     }
     config_path = sweep_harness.write_config(parameters=expanded_params)
-    sweep_harness.run_cli(config_path, "--update-params")
-
-    # Optuna should have 4 migrated trials (all old combos still valid).
-    study = sweep_harness.load_optuna_study()
-    complete_trials = study.get_trials(states=[optuna.trial.TrialState.COMPLETE])
-    assert len(complete_trials) == 4
-
-    # Run sweep to fill in remaining 2 new combos (lr=0.001 × layers=[2,4]).
-    sweep_harness.run_cli(config_path)
+    sweep_harness.run_cli(config_path, "--allow-param-change")
 
     trial_runs_after = _assert_parent_and_get_trial_runs(harness=sweep_harness)
     assert len(trial_runs_after) == 6  # 4 old + 2 new
@@ -104,9 +89,11 @@ def test_grid_shrink_values(sweep_harness: SweepHarness) -> None:
     # Shrink: drop "green".
     shrunk_params = {"color": ["red", "blue"], "shape": ["square"]}
     config_path = sweep_harness.write_config(parameters=shrunk_params)
-    sweep_harness.run_cli(config_path, "--update-params")
+    sweep_harness.run_cli(config_path, "--allow-param-change")
 
-    # All 3 trial runs still visible in MLflow.
+    # All 3 trial runs still visible in MLflow (the dropped one is just not in
+    # the new Optuna study).  No new trials are added because the new grid is
+    # already exhausted by the migrated trials.
     trial_runs_after = _assert_parent_and_get_trial_runs(harness=sweep_harness)
     assert len(trial_runs_after) == 3
 
@@ -117,7 +104,7 @@ def test_grid_shrink_values(sweep_harness: SweepHarness) -> None:
 
 
 def test_grid_add_new_param(sweep_harness: SweepHarness) -> None:
-    """Adding a new param means no old trials match; subsequent run creates all new trials."""
+    """Adding a new param means no old trials match; sweep then runs all new trials."""
     initial_params = {"color": ["red", "blue"]}
     config_path = sweep_harness.write_config(parameters=initial_params)
     sweep_harness.run_cli(config_path)
@@ -125,23 +112,12 @@ def test_grid_add_new_param(sweep_harness: SweepHarness) -> None:
     trial_runs_before = _assert_parent_and_get_trial_runs(harness=sweep_harness)
     assert len(trial_runs_before) == 2
 
-    # Add a new parameter — migrate only (no trials match).
+    # Add a new parameter — migrate (no trials match) + run new trials.
     new_params = {"color": ["red", "blue"], "size": ["small", "large"]}
     config_path = sweep_harness.write_config(parameters=new_params)
-    sweep_harness.run_cli(config_path, "--update-params")
+    sweep_harness.run_cli(config_path, "--allow-param-change")
 
-    # Optuna should have 0 migrated trials (param names don't match).
-    study = sweep_harness.load_optuna_study()
-    assert len(study.get_trials(states=[optuna.trial.TrialState.COMPLETE])) == 0
-
-    # 2 old runs still in MLflow (re-parented to new parent).
-    trial_runs_mid = _assert_parent_and_get_trial_runs(harness=sweep_harness)
-    assert len(trial_runs_mid) == 2
-
-    # Now run to create the 4 new trials.
-    sweep_harness.run_cli(config_path)
-
-    # 2 old + 4 new = 6 total in MLflow.
+    # 2 old (re-parented) + 4 new = 6 total in MLflow.
     trial_runs_after = _assert_parent_and_get_trial_runs(harness=sweep_harness)
     assert len(trial_runs_after) == 6
 
@@ -155,7 +131,7 @@ def test_trial_runs_reparented(sweep_harness: SweepHarness) -> None:
     assert old_parent_id is not None
 
     config_path = sweep_harness.write_config(parameters={"x": [1, 2, 3]})
-    sweep_harness.run_cli(config_path, "--update-params")
+    sweep_harness.run_cli(config_path, "--allow-param-change")
 
     new_parent_id = sweep_harness.get_parent_run_id()
     assert new_parent_id is not None
@@ -189,12 +165,12 @@ def test_children_of_trials_preserved(sweep_harness: SweepHarness) -> None:
     )
     assert len(children_before) == 1
 
-    # Update params (migration only).
+    # Migrate + run any new trials.
     config_path = sweep_harness.write_config(
         parameters={"x": [1, 2]},
         command=f"{sys.executable} {child_script}",
     )
-    sweep_harness.run_cli(config_path, "--update-params")
+    sweep_harness.run_cli(config_path, "--allow-param-change")
 
     # The old trial's child should still point to the old trial run.
     children_after = client.search_runs(
@@ -220,14 +196,14 @@ def test_failed_trials_migrated(sweep_harness: SweepHarness) -> None:
     fail_trials = study_before.get_trials(states=[optuna.trial.TrialState.FAIL])
     assert len(fail_trials) > 0, "Expected at least one failed trial"
 
-    # Update params (add a new value to trigger change) — migration only.
+    # Add a new value — migrate + run new trials.
     expanded_params = {"should_fail": ["true", "false", "maybe"]}
     config_path = sweep_harness.write_config(
         parameters=expanded_params,
         command=f"{sys.executable} {fail_script}",
         spec={"max_retry": 2},
     )
-    sweep_harness.run_cli(config_path, "--update-params")
+    sweep_harness.run_cli(config_path, "--allow-param-change")
 
     # The new study should have migrated the failed trials.
     study_after = sweep_harness.load_optuna_study()
@@ -235,20 +211,20 @@ def test_failed_trials_migrated(sweep_harness: SweepHarness) -> None:
     assert len(fail_trials_after) >= len(fail_trials)
 
 
-def test_update_params_no_change_noop(sweep_harness: SweepHarness) -> None:
-    """--update-params with unchanged config should detect nothing changed."""
+def test_allow_param_change_no_change_warns_and_runs(sweep_harness: SweepHarness) -> None:
+    """--allow-param-change with unchanged config should warn but still complete normally."""
     config_path = sweep_harness.write_config(parameters={"x": [1, 2]})
     sweep_harness.run_cli(config_path)
 
     parent_id_before = sweep_harness.get_parent_run_id()
 
-    # Run again with --update-params but same config.
+    # Run again with --allow-param-change but same config.
     cmd = [sys.executable, os.path.join(sweep_harness.repo_root, "sweep.py"),
-           config_path, "--update-params"]
+           config_path, "--allow-param-change"]
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=False)
     assert proc.returncode == 0
-    assert "not changed" in proc.stdout.lower()
+    assert "had no effect" in proc.stdout.lower()
 
-    # Parent should be the same (no migration needed).
+    # Parent should be the same (no migration).
     parent_id_after = sweep_harness.get_parent_run_id()
     assert parent_id_before == parent_id_after

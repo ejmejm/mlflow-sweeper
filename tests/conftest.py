@@ -79,6 +79,48 @@ class SweepHarness:
         if proc.returncode != 0:
             raise RuntimeError(f"Command failed: {cmd}\n\nOutput:\n{proc.stdout}")
 
+    def build_config(
+        self,
+        *,
+        parameters: dict[str, Any],
+        algorithm: str = "grid",
+        spec: dict[str, Any] | None = None,
+    ) -> Any:
+        """Build a SweepConfig in-process (no YAML on disk).
+
+        Used by programmatic tests that call ``run_sweep(config, fn, ...)``
+        directly instead of going through the CLI.
+        """
+        from mlflow_sweeper.config import SweepConfig
+
+        config_dict: dict[str, Any] = {
+            "experiment": self.experiment,
+            "sweep_name": self.sweep_name,
+            "algorithm": algorithm,
+            "parameters": parameters,
+            "optuna_storage": self.optuna_storage,
+            "mlflow_storage": self.mlflow_storage,
+            "output_dir": self.output_dir,
+        }
+        if spec is not None:
+            config_dict["spec"] = spec
+        return SweepConfig.from_dict_config(OmegaConf.create(config_dict))
+
+    def run_programmatic(
+        self,
+        *,
+        fn,
+        parameters: dict[str, Any],
+        algorithm: str = "grid",
+        spec: dict[str, Any] | None = None,
+        **kwargs,
+    ) -> None:
+        """Build a config and call ``run_sweep`` programmatically."""
+        from mlflow_sweeper.runner import run_sweep
+
+        config = self.build_config(parameters=parameters, algorithm=algorithm, spec=spec)
+        run_sweep(config, fn, **kwargs)
+
     def mlflow_client(self) -> MlflowClient:
         """Create an MLflow client for this harness's tracking URI."""
         return MlflowClient(tracking_uri=self.mlflow_storage)

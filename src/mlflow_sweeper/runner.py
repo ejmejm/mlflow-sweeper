@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 from functools import partial
 import hashlib
 import itertools
@@ -13,7 +14,8 @@ import subprocess
 import sys
 import tempfile
 import time
-from typing import Any
+import traceback
+from typing import Any, Literal
 
 from filelock import FileLock
 import mlflow
@@ -41,6 +43,11 @@ from mlflow_sweeper.samplers.random import RandomSampler
 
 
 logger = logging.getLogger(__name__)
+
+
+# Marker for "no metric value returned by user fn" — distinguishes from a
+# real None (which means "fall back to MLflow lookup").
+_NO_RETURN_VALUE: Any = object()
 
 
 class TrialRunError(Exception):
@@ -129,10 +136,15 @@ def parse_args() -> argparse.Namespace:
         help = "Disable automatic plot generation after sweep completion.",
     )
     parser.add_argument(
-        "--update-params",
+        "--allow-param-change",
         action = "store_true",
         default = False,
-        help = "Update an existing sweep's parameters in-place, migrating valid trials.",
+        help = (
+            "Permit the sweep config's parameters to differ from the existing "
+            "sweep. When set, valid trials are migrated and the sweep continues. "
+            "If the config has not changed, a warning is emitted and the sweep "
+            "runs normally."
+        ),
     )
     return parser.parse_args()
 
@@ -216,18 +228,69 @@ def get_param_values_for_trial(
     return {name: spec.suggest(trial) for name, spec in param_specs.items()}
 
 
-def run_experiment(
+def _resolve_metric(
+    return_value: Any,
+    config: SweepConfig,
+    mlflow_client: MlflowClient,
+    trial_run_id: str,
+) -> float:
+    """Resolve the optimization metric for a finished trial.
+
+    Args:
+        return_value: Value the body returned. May be a number (used directly),
+            a ``dict[str, float]`` of metrics (those are logged then the
+            ``config.spec.metric`` entry is returned), or ``None``/the
+            ``_NO_RETURN_VALUE`` sentinel (fall back to fetching the metric
+            from the trial's MLflow run, matching the subprocess path).
+    """
+    if isinstance(return_value, (int, float)) and not isinstance(return_value, bool):
+        return float(return_value)
+
+    if isinstance(return_value, dict):
+        # Log every numeric entry, then pick the optimization metric.
+        numeric_metrics = {k: float(v) for k, v in return_value.items()}
+        if numeric_metrics:
+            with mlflow.start_run(run_id=trial_run_id):
+                mlflow.log_metrics(numeric_metrics)
+        if config.spec.metric is None:
+            return 0.0
+        if config.spec.metric not in numeric_metrics:
+            raise ValueError(
+                f"Optimization metric {config.spec.metric} not found in returned dict "
+                f"for trial run {trial_run_id}!"
+            )
+        return numeric_metrics[config.spec.metric]
+
+    if config.spec.metric is None:
+        return 0.0
+
+    trial_run = mlflow_client.get_run(trial_run_id)
+    summary_metrics = trial_run.data.metrics
+    if config.spec.metric not in summary_metrics:
+        raise ValueError(
+            f"Optimization metric {config.spec.metric} not found in trial run {trial_run_id}!"
+        )
+    return float(summary_metrics[config.spec.metric])
+
+
+def _run_trial_with_mlflow(
     trial: optuna.Trial,
     config: SweepConfig,
     mlflow_client: MlflowClient,
     args: argparse.Namespace,
-    parent_run_id: str = "",
+    parent_run_id: str,
+    *,
+    body: Callable[[dict[str, Any], str], Any],
+    label_fn: Callable[[dict[str, Any]], str],
 ) -> float:
-    """Run a single trial as a subprocess and log it under MLflow."""
+    """Shared MLflow lifecycle around a single trial.
+
+    Creates the trial's MLflow child run, lets ``body`` execute the work
+    (subprocess or in-process callable), then ends the run with the right
+    status and resolves the optimization metric.
+    """
     param_values = get_param_values_for_trial(trial, config.param_specs)
-    params_str_list = [f"{name}={value}" for name, value in param_values.items()]
-    command_list = config.command.split() + params_str_list
-    full_command_str = " ".join(command_list)
+    label = label_fn(param_values)
 
     active = mlflow.active_run()
     if active is not None:
@@ -246,87 +309,161 @@ def run_experiment(
     trial_run_id = trial_run.info.run_id
     trial.set_user_attr('mlflow_run_id', trial_run_id)
 
-    mlflow.log_param("full_command", full_command_str)
+    mlflow.log_param("full_command", label)
     if args.log_params:
         mlflow.log_params(param_values)
-    
-    environ = os.environ.copy()
-    environ["MLFLOW_RUN_ID"] = trial_run_id
-    environ["MLFLOW_TRACKING_URI"] = config.mlflow_storage
 
     logger.info("Sweep run #%s.", trial.number)
     logger.info("Created trial MLflow run: %s.", trial_run_id)
-    logger.info("Running new trial with command: `%s`", full_command_str)
+    logger.info("Running new trial: `%s`", label)
 
-    proc: subprocess.Popen[str] | None = None
+    state = RunStatus.FINISHED
+    return_value: Any = _NO_RETURN_VALUE
     try:
-        state = RunStatus.FINISHED
-        proc = subprocess.Popen(
-            command_list,
-            env = environ,
-            stdout = subprocess.PIPE,
-            stderr = subprocess.STDOUT,
-            text = True,
-            bufsize = 1,
-        )
-
-        faded = "\033[2;37m"  # dim grey
-        reset = "\033[0m"
-        output_lines: list[str] = []
-        if proc.stdout is not None:
-            for line in proc.stdout:
-                output_lines.append(line)
-                print(f"{faded}{line}{reset}", end="", flush=True)
-
-        proc.wait()
-        logger.info(f"Trial run {trial_run_id} finished with exit code {proc.returncode}.")
-        
-        if proc.returncode != 0:
-            state = RunStatus.FAILED
-            error_trace = extract_error_trace(output_lines)
-            error_msg = (
-                f"Trial run {trial_run_id} failed with exit code {proc.returncode}!\n\n"
-                f"{error_trace}"
-            )
-            if args.abort_on_fail:
-                raise TrialRunAbortError(error_msg)
-            else:
-                raise TrialRunError(error_msg)
-    
+        return_value = body(param_values, trial_run_id)
+    except (TrialRunError, TrialRunAbortError):
+        state = RunStatus.FAILED
+        raise
     except KeyboardInterrupt:
         state = RunStatus.KILLED
-        if proc is not None:
-            proc.send_signal(signal.SIGINT)
-
-            # Wait up to 60s, then hard-kill.
-            for _ in range(60):
-                proc.poll()
-                if proc.returncode is not None:
-                    break
-                time.sleep(1)
-            if proc.returncode is None:
-                proc.kill()
         raise
-
     finally:
-        if output_lines:
-            with tempfile.TemporaryDirectory() as tmpdir:
-                log_path = os.path.join(tmpdir, "stdout.log")
-                with open(log_path, "w") as f:
-                    f.writelines(output_lines)
-                mlflow.log_artifact(log_path)
         mlflow.end_run(RunStatus.to_string(state))
 
-    if config.spec.metric is None:
-        return 0.0
-    
-    trial_run = mlflow_client.get_run(trial_run_id)
-    summary_metrics = trial_run.data.metrics
-    if config.spec.metric not in summary_metrics:
-        raise ValueError(
-            f"Optimization metric {config.spec.metric} not found in trial run {trial_run_id}!"
-        )
-    return float(summary_metrics[config.spec.metric])
+    return _resolve_metric(return_value, config, mlflow_client, trial_run_id)
+
+
+def _subprocess_body(
+    config: SweepConfig,
+    args: argparse.Namespace,
+) -> Callable[[dict[str, Any], str], Any]:
+    """Body that executes a trial by spawning ``config.command`` as a subprocess."""
+    def _body(param_values: dict[str, Any], trial_run_id: str) -> Any:
+        params_str_list = [f"{name}={value}" for name, value in param_values.items()]
+        command_list = config.command.split() + params_str_list
+
+        environ = os.environ.copy()
+        environ["MLFLOW_RUN_ID"] = trial_run_id
+        environ["MLFLOW_TRACKING_URI"] = config.mlflow_storage
+
+        proc: subprocess.Popen[str] | None = None
+        output_lines: list[str] = []
+        try:
+            proc = subprocess.Popen(
+                command_list,
+                env = environ,
+                stdout = subprocess.PIPE,
+                stderr = subprocess.STDOUT,
+                text = True,
+                bufsize = 1,
+            )
+
+            faded = "\033[2;37m"  # dim grey
+            reset = "\033[0m"
+            if proc.stdout is not None:
+                for line in proc.stdout:
+                    output_lines.append(line)
+                    print(f"{faded}{line}{reset}", end="", flush=True)
+
+            proc.wait()
+            logger.info(f"Trial run {trial_run_id} finished with exit code {proc.returncode}.")
+
+            if proc.returncode != 0:
+                error_trace = extract_error_trace(output_lines)
+                error_msg = (
+                    f"Trial run {trial_run_id} failed with exit code {proc.returncode}!\n\n"
+                    f"{error_trace}"
+                )
+                if args.abort_on_fail:
+                    raise TrialRunAbortError(error_msg)
+                raise TrialRunError(error_msg)
+
+        except KeyboardInterrupt:
+            if proc is not None:
+                proc.send_signal(signal.SIGINT)
+                # Wait up to 60s, then hard-kill.
+                for _ in range(60):
+                    proc.poll()
+                    if proc.returncode is not None:
+                        break
+                    time.sleep(1)
+                if proc.returncode is None:
+                    proc.kill()
+            raise
+        finally:
+            if output_lines:
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    log_path = os.path.join(tmpdir, "stdout.log")
+                    with open(log_path, "w") as f:
+                        f.writelines(output_lines)
+                    mlflow.log_artifact(log_path)
+        return None
+    return _body
+
+
+def _callable_body(
+    fn: Callable[..., Any],
+    args: argparse.Namespace,
+) -> Callable[[dict[str, Any], str], Any]:
+    """Body that executes a trial by calling a user-provided Python function.
+
+    The function is invoked with ``**param_values``.  An MLflow run is
+    already active when ``fn`` runs; the user must not call
+    ``start_run``/``end_run``.  We assert the active-run-stack depth is
+    unchanged afterwards to surface contract violations early.
+    """
+    from mlflow.tracking import fluent as _fluent
+
+    def _body(param_values: dict[str, Any], trial_run_id: str) -> Any:
+        stack_before = list(_fluent._active_run_stack.get())
+        try:
+            return fn(**param_values)
+        except (TrialRunError, TrialRunAbortError, KeyboardInterrupt):
+            raise
+        except Exception as e:
+            tb = traceback.format_exc()
+            error_msg = (
+                f"Trial run {trial_run_id} failed with {type(e).__name__}: {e}\n\n{tb}"
+            )
+            if args.abort_on_fail:
+                raise TrialRunAbortError(error_msg) from e
+            raise TrialRunError(error_msg) from e
+        finally:
+            stack_after = list(_fluent._active_run_stack.get())
+            if [r.info.run_id for r in stack_before] != [r.info.run_id for r in stack_after]:
+                # Reset the stack so subsequent trials aren't poisoned, but
+                # raise so the user sees the bug.
+                _fluent._active_run_stack.set(stack_before)
+                raise RuntimeError(
+                    "User function modified the MLflow active-run stack. "
+                    "Do not call mlflow.start_run() / mlflow.end_run() inside "
+                    "the function passed to run_sweep(); the runner manages "
+                    "the trial's MLflow run for you."
+                )
+    return _body
+
+
+def run_experiment(
+    trial: optuna.Trial,
+    config: SweepConfig,
+    mlflow_client: MlflowClient,
+    args: argparse.Namespace,
+    parent_run_id: str = "",
+) -> float:
+    """Run a single trial as a subprocess and log it under MLflow."""
+    def _label(param_values: dict[str, Any]) -> str:
+        params_str_list = [f"{name}={value}" for name, value in param_values.items()]
+        return " ".join(config.command.split() + params_str_list)
+
+    return _run_trial_with_mlflow(
+        trial,
+        config,
+        mlflow_client,
+        args,
+        parent_run_id,
+        body=_subprocess_body(config, args),
+        label_fn=_label,
+    )
 
 
 def start_mlflow_parent_run(
@@ -532,85 +669,207 @@ def update_sweep_params(
     return new_study
 
 
-def run_sweep(args: argparse.Namespace, config: SweepConfig) -> None:
-    """Run a full sweep for a single config."""
-    os.makedirs(config.output_dir, exist_ok=True)
+def _setup_sweep_storage(
+    config: SweepConfig,
+) -> tuple[optuna.Study, MlflowClient, str]:
+    """Initialize Optuna + MLflow storage and start (or resume) the parent run.
 
+    Returns (study, mlflow_client, parent_run_id).  The parent run is left
+    *active* on the calling thread's MLflow run stack — callers are
+    responsible for stripping it before launching workers.
+    """
+    os.makedirs(config.output_dir, exist_ok=True)
     study = init_study(config)
 
     mlflow.set_tracking_uri(config.mlflow_storage)
-    # Protect MLflow database initialization from concurrent access by multiple processes.
     with FileLock(_mlflow_db_lock_path(config)):
         mlflow_client = MlflowClient(tracking_uri=config.mlflow_storage)
         mlflow.set_experiment(config.experiment)
         start_mlflow_parent_run(mlflow_client, config, study.study_name)
-    
-    # This will delete any Optuna trials that no longer exist in MLFlow.
+
     sync_mlflow_and_optuna(study, mlflow_client, config)
-
     parent_run_id = mlflow.active_run().info.run_id
+    return study, mlflow_client, parent_run_id
 
-    # Detect config changes by attempting to log params on the parent run.
-    # MLflow's param immutability will raise if values differ.
-    # Only track fields that affect experiment execution — exclude display-only
-    # fields like plots/plot_params so changing them doesn't require a re-sweep.
+
+def _tracked_config_dict(config: SweepConfig) -> dict[str, Any]:
+    """Subset of the SweepConfig that should trigger a re-sweep when changed."""
     structured_config = OmegaConf.structured(config)
     dict_config = OmegaConf.to_container(structured_config, throw_on_missing=True)
-    tracked_config = {k: v for k, v in dict_config.items() if k not in ('plots', 'param_specs')}
+    return {k: v for k, v in dict_config.items() if k not in ('plots', 'param_specs')}
 
-    config_changed = False
+
+def _handle_config_change(
+    config: SweepConfig,
+    study: optuna.Study,
+    mlflow_client: MlflowClient,
+    parent_run_id: str,
+    allow_param_change: bool,
+) -> tuple[optuna.Study, str, bool]:
+    """Detect a config change vs. the parent run; migrate if allowed.
+
+    Returns (study, parent_run_id, did_migrate).  The active MLflow run on the
+    current thread points to the (possibly new) parent run on return.
+    """
+    tracked_config = _tracked_config_dict(config)
     try:
         mlflow.log_params(tracked_config)
+        return study, parent_run_id, False
     except MlflowException as e:
         if "Changing param values is not allowed" not in str(e):
             raise
-        config_changed = True
-        if not args.update_params:
+        if not allow_param_change:
             logger.error(
                 "Sweep config has changed since the last run. To run with the new "
                 "config, either:\n"
-                "  1. Delete the existing sweep with --delete and start fresh, or\n"
+                "  1. Delete the existing sweep and start fresh, or\n"
                 "  2. Rename the sweep (change 'sweep_name' in your config), or\n"
-                "  3. Use --update-params to update the sweep in-place."
+                "  3. Pass allow_param_change=True (CLI: --allow-param-change) to "
+                "update the sweep in-place."
             )
             raise SystemExit(1) from e
 
-        logger.info("Config changed. Updating sweep params in-place...")
+        logger.info("Config changed. Migrating sweep params in-place...")
         old_parent_run_id = parent_run_id
 
         # End current parent run context before migration.
         mlflow.end_run()
 
         # Migrate Optuna study (delete old, create new, add matching trials).
-        study = update_sweep_params(config, study, mlflow_client)
+        new_study = update_sweep_params(config, study, mlflow_client)
 
         # Delete old MLflow parent and create a new one.
         mlflow_client.delete_run(old_parent_run_id)
-        start_mlflow_parent_run(mlflow_client, config, study.study_name)
-        parent_run_id = mlflow.active_run().info.run_id
+        start_mlflow_parent_run(mlflow_client, config, new_study.study_name)
+        new_parent_run_id = mlflow.active_run().info.run_id
 
         # Re-parent all existing trial runs to the new parent.
-        _reparent_mlflow_runs(mlflow_client, config, old_parent_run_id, parent_run_id)
+        _reparent_mlflow_runs(mlflow_client, config, old_parent_run_id, new_parent_run_id)
 
         # Log new config on the fresh parent.
         mlflow.log_params(tracked_config)
 
-        logger.info("Param update complete.")
-        mlflow_client.set_terminated(parent_run_id, RunStatus.to_string(RunStatus.RUNNING))
-        mlflow.end_run()
-        return
+        logger.info("Param migration complete.")
+        return new_study, new_parent_run_id, True
 
-    if args.update_params:
-        # Config hasn't changed — nothing to migrate.
-        logger.info("Config has not changed. Nothing to update.")
-        mlflow.end_run()
-        return
+
+def _strip_parent_from_active_stack(parent_run_id: str) -> None:
+    """Remove the parent run from the thread-local MLflow active-run stack.
+
+    The parent run stays alive on the server; its terminal status is managed
+    explicitly via ``mlflow_client.set_terminated()``.  Stripping it here
+    lets child trials call ``mlflow.start_run()`` without ``nested=True``
+    and avoids accidental nesting when worker threads inherit the stack.
+    """
+    _stack = mlflow.tracking.fluent._active_run_stack
+    _stack.set([r for r in _stack.get() if r.info.run_id != parent_run_id])
+
+
+def _finalize_parent_run(
+    study: optuna.Study,
+    config: SweepConfig,
+    mlflow_client: MlflowClient,
+    parent_run_id: str,
+    no_plots: bool,
+) -> None:
+    """Generate plots (if enabled), then mark the parent run FINISHED/RUNNING."""
+    if check_study_is_complete(study):
+        if not no_plots:
+            # generate_plots needs an active run for mlflow.active_run() and
+            # artifact logging.  The parent may already be active (if no
+            # workers were spawned and the stack was never stripped) or
+            # inactive (post-optimization).  Normalize by ending any active
+            # run, then resuming the parent fresh.
+            active = mlflow.active_run()
+            if active is not None:
+                mlflow.end_run()
+            mlflow.start_run(run_id=parent_run_id)
+            try:
+                generate_plots(study, config)
+            finally:
+                mlflow.end_run()
+        mlflow_client.set_terminated(parent_run_id, RunStatus.to_string(RunStatus.FINISHED))
+    else:
+        # Make sure no run is left dangling on the active stack.
+        if mlflow.active_run() is not None:
+            mlflow.end_run()
+        mlflow_client.set_terminated(parent_run_id, RunStatus.to_string(RunStatus.RUNNING))
+
+
+def _drive_optimization(
+    study: optuna.Study,
+    config: SweepConfig,
+    mlflow_client: MlflowClient,
+    parent_run_id: str,
+    run_fn: Callable[[optuna.Trial], float],
+    *,
+    n_trials: int | None,
+    n_jobs: int,
+    no_plots: bool,
+) -> None:
+    """Drive ``optimize_study`` and manage the parent run's terminal status."""
+    _strip_parent_from_active_stack(parent_run_id)
+
+    try:
+        optimize_study(study, run_fn, n_trials=n_trials, n_jobs=n_jobs, catch=(TrialRunError,))
+    except KeyboardInterrupt:
+        # Make sure no run is left dangling on the active stack.
+        if mlflow.active_run() is not None:
+            mlflow.end_run()
+        mlflow_client.set_terminated(parent_run_id, RunStatus.to_string(RunStatus.KILLED))
+        raise
+    except Exception:
+        if mlflow.active_run() is not None:
+            mlflow.end_run()
+        mlflow_client.set_terminated(parent_run_id, RunStatus.to_string(RunStatus.FAILED))
+        raise
+
+    # Only finalize (set FINISHED/RUNNING + plots) on the success path —
+    # the error paths above already set the terminal status.
+    _finalize_parent_run(study, config, mlflow_client, parent_run_id, no_plots)
+    logger.info("Sweep %s completed.", config.sweep_name)
+
+
+def _build_cli_args_namespace(
+    *,
+    n_trials: int | None,
+    n_jobs: int,
+    abort_on_fail: bool,
+    log_params: bool,
+    no_plots: bool,
+    allow_param_change: bool,
+) -> argparse.Namespace:
+    """Build a Namespace mirroring the CLI args, for sharing with subprocess body."""
+    return argparse.Namespace(
+        n_trials = n_trials,
+        n_jobs = n_jobs,
+        abort_on_fail = abort_on_fail,
+        log_params = log_params,
+        no_plots = no_plots,
+        allow_param_change = allow_param_change,
+    )
+
+
+def _run_sweep_cli(args: argparse.Namespace, config: SweepConfig) -> None:
+    """CLI driver: runs a sweep using the configured shell command (subprocess)."""
+    if not config.command:
+        raise ValueError(
+            "SweepConfig.command is required for the CLI/subprocess sweep path."
+        )
+
+    study, mlflow_client, parent_run_id = _setup_sweep_storage(config)
+    study, parent_run_id, did_migrate = _handle_config_change(
+        config, study, mlflow_client, parent_run_id,
+        allow_param_change=args.allow_param_change,
+    )
+    if args.allow_param_change and not did_migrate:
+        logger.warning(
+            "--allow-param-change had no effect: the sweep config has not changed."
+        )
 
     if check_study_is_complete(study):
         logger.info("Study is complete. No more trials to run.")
-        if not args.no_plots:
-            generate_plots(study, config)
-        mlflow.end_run()
+        _finalize_parent_run(study, config, mlflow_client, parent_run_id, args.no_plots)
         return
 
     run_fn = partial(
@@ -620,42 +879,139 @@ def run_sweep(args: argparse.Namespace, config: SweepConfig) -> None:
         args = args,
         parent_run_id = parent_run_id,
     )
+    _drive_optimization(
+        study, config, mlflow_client, parent_run_id, run_fn,
+        n_trials=args.n_trials, n_jobs=args.n_jobs, no_plots=args.no_plots,
+    )
 
-    # Remove the parent run from the thread-local active run stack so that
-    # child runs can call mlflow.start_run() without nested=True.  The parent
-    # run stays alive on the server; we manage its terminal status explicitly
-    # via mlflow_client.set_terminated().  In parallel mode (-j N) worker
-    # threads never see the parent on their stacks, so this is a no-op there.
-    _stack = mlflow.tracking.fluent._active_run_stack
-    _stack.set([r for r in _stack.get() if r.info.run_id != parent_run_id])
 
-    # Update the status of the parent MLFlow run based on the status of the Optuna study.
-    try:
-        optimize_study(study, run_fn, n_trials=args.n_trials, n_jobs=args.n_jobs, catch=(TrialRunError,))
-    except KeyboardInterrupt as e:
-        mlflow_client.set_terminated(parent_run_id, RunStatus.to_string(RunStatus.KILLED))
-        raise e
-    except Exception as e:
-        mlflow_client.set_terminated(parent_run_id, RunStatus.to_string(RunStatus.FAILED))
-        raise e
-    finally:
-        if check_study_is_complete(study):
-            if not args.no_plots:
-                # Re-activate the parent run: it was removed from the active
-                # run stack (line ~438) so child trials could call
-                # mlflow.start_run() without nested=True.  generate_plots
-                # needs an active run for mlflow.active_run() and artifact
-                # logging, so we resume it here.
-                mlflow.start_run(run_id=parent_run_id)
-                try:
-                    generate_plots(study, config)
-                finally:
-                    mlflow.end_run()
-            mlflow_client.set_terminated(parent_run_id, RunStatus.to_string(RunStatus.FINISHED))
-        else:
-            mlflow_client.set_terminated(parent_run_id, RunStatus.to_string(RunStatus.RUNNING))
+def run_sweep(
+    config: SweepConfig,
+    fn: Callable[..., Any],
+    *,
+    n_trials: int | None = None,
+    n_jobs: int = 1,
+    executor: Literal["thread", "process"] = "process",
+    abort_on_fail: bool = False,
+    log_params: bool = False,
+    no_plots: bool = False,
+    allow_param_change: bool = False,
+) -> None:
+    """Run a full sweep using a Python callable for each trial.
 
-    logger.info("Sweep %s completed.", config.sweep_name)
+    Args:
+        config: Parsed sweep configuration.
+        fn: Per-trial Python function. Called with ``**param_values``; must
+            not call ``mlflow.start_run``/``end_run`` (the runner manages
+            the trial's MLflow run).  May return a ``float`` (used as the
+            optimization metric), a ``dict[str, float]`` of metrics
+            (logged then ``config.spec.metric`` is used), or ``None`` (the
+            metric is read off the MLflow run after the function returns).
+        n_trials: Total trials cap; ``None`` = run until the study is exhausted.
+        n_jobs: Worker count.  When ``1`` the trial runs inline regardless of
+            ``executor``.  When ``>1`` use either a thread or process pool.
+        executor: ``"thread"`` or ``"process"`` (default).  Process pool gives
+            real parallelism but requires ``fn`` to be importable
+            (no closures/lambdas).
+        abort_on_fail: If True, the first failing trial terminates the sweep.
+        log_params: Mirror the CLI flag — log per-trial params on the trial run.
+        no_plots: Skip plot generation after the sweep completes.
+        allow_param_change: If True, permit the config's parameters to differ
+            from the existing sweep; valid trials are migrated.  Warns if
+            the config has not actually changed.
+    """
+    if executor not in ("thread", "process"):
+        raise ValueError(f"executor must be 'thread' or 'process', got {executor!r}")
+    if n_jobs < 1:
+        raise ValueError(f"n_jobs must be >= 1, got {n_jobs}")
+
+    # Validate process-pool serialization BEFORE we touch MLflow / Optuna,
+    # so a bad function (lambda, closure) doesn't leave an orphan parent run.
+    if executor == "process" and n_jobs > 1:
+        from mlflow_sweeper.process_executor import validate_fn_picklable
+        validate_fn_picklable(fn)
+
+    args = _build_cli_args_namespace(
+        n_trials=n_trials, n_jobs=n_jobs, abort_on_fail=abort_on_fail,
+        log_params=log_params, no_plots=no_plots,
+        allow_param_change=allow_param_change,
+    )
+
+    study, mlflow_client, parent_run_id = _setup_sweep_storage(config)
+    study, parent_run_id, did_migrate = _handle_config_change(
+        config, study, mlflow_client, parent_run_id,
+        allow_param_change=allow_param_change,
+    )
+    if allow_param_change and not did_migrate:
+        logger.warning(
+            "allow_param_change=True had no effect: the sweep config has not changed."
+        )
+
+    if check_study_is_complete(study):
+        logger.info("Study is complete. No more trials to run.")
+        _finalize_parent_run(study, config, mlflow_client, parent_run_id, no_plots)
+        return
+
+    use_process_pool = executor == "process" and n_jobs > 1
+    if use_process_pool:
+        from mlflow_sweeper.process_executor import run_with_process_pool
+
+        _strip_parent_from_active_stack(parent_run_id)
+        try:
+            run_with_process_pool(
+                config = config,
+                fn = fn,
+                n_jobs = n_jobs,
+                n_trials = n_trials,
+                parent_run_id = parent_run_id,
+                args_namespace = args,
+            )
+        except KeyboardInterrupt:
+            if mlflow.active_run() is not None:
+                mlflow.end_run()
+            mlflow_client.set_terminated(parent_run_id, RunStatus.to_string(RunStatus.KILLED))
+            raise
+        except Exception:
+            if mlflow.active_run() is not None:
+                mlflow.end_run()
+            mlflow_client.set_terminated(parent_run_id, RunStatus.to_string(RunStatus.FAILED))
+            raise
+
+        # Success path: reload the study so we see trials added by workers,
+        # then finalize (plots + FINISHED).
+        study = optuna.load_study(
+            study_name=get_study_name(config),
+            storage=config.optuna_storage,
+            sampler=make_sampler(config),
+        )
+        _finalize_parent_run(study, config, mlflow_client, parent_run_id, no_plots)
+        logger.info("Sweep %s completed.", config.sweep_name)
+        return
+
+    # Serial / thread-pool path.
+    run_fn = partial(
+        _run_trial_with_mlflow,
+        config = config,
+        mlflow_client = mlflow_client,
+        args = args,
+        parent_run_id = parent_run_id,
+        body = _callable_body(fn, args),
+        label_fn = _callable_label_fn(fn),
+    )
+    _drive_optimization(
+        study, config, mlflow_client, parent_run_id, run_fn,
+        n_trials=n_trials, n_jobs=n_jobs, no_plots=no_plots,
+    )
+
+
+def _callable_label_fn(fn: Callable[..., Any]) -> Callable[[dict[str, Any]], str]:
+    """Build a label string for the 'full_command' MLflow param of a callable trial."""
+    qualname = getattr(fn, "__qualname__", repr(fn))
+    module = getattr(fn, "__module__", "<unknown>")
+    def _label(param_values: dict[str, Any]) -> str:
+        params_str = ", ".join(f"{k}={v}" for k, v in param_values.items())
+        return f"{module}.{qualname}({params_str})"
+    return _label
 
 
 def delete_sweep(config: SweepConfig) -> None:

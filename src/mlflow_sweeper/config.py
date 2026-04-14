@@ -20,10 +20,12 @@ from optuna.study import StudyDirection
 
 logger = logging.getLogger(__name__)
 
+# ``command`` is required for the CLI/subprocess path but optional for the
+# programmatic ``run_sweep(config, fn, ...)`` API; the CLI driver enforces it
+# explicitly when invoked.
 CONFIG_REQUIRED_FIELDS = [
     "experiment",
     "sweep_name",
-    "command",
     "algorithm",
     "parameters",
     "optuna_storage",
@@ -305,7 +307,6 @@ class SweepConfig:
     # Required fields
     experiment: str
     sweep_name: str
-    command: str
     optuna_storage: str
     mlflow_storage: str
     algorithm: str
@@ -314,6 +315,10 @@ class SweepConfig:
     spec: SpecConfig
 
     # Optional fields
+    # ``command`` is required for the CLI/subprocess path (enforced in
+    # ``validate_config``) but may be omitted when calling ``run_sweep``
+    # programmatically with a Python callable.
+    command: str | None = None
     output_dir: str = "output"
     plots: PlotsConfig = field(default_factory=PlotsConfig)
 
@@ -339,11 +344,12 @@ class SweepConfig:
         kwargs = {}
         if "output_dir" in config:
             kwargs["output_dir"] = config.output_dir
+        if "command" in config:
+            kwargs["command"] = config.command
 
         return cls(
             experiment = config.experiment,
             sweep_name = config.sweep_name,
-            command = config.command,
             optuna_storage = config.optuna_storage,
             mlflow_storage = config.mlflow_storage,
             algorithm = config.algorithm,

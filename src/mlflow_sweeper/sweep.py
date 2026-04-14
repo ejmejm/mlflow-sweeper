@@ -11,7 +11,7 @@ import logging
 import sys
 
 from mlflow_sweeper.config import load_configs, SweepConfig
-from mlflow_sweeper.runner import delete_sweep, parse_args, run_sweep
+from mlflow_sweeper.runner import _run_sweep_cli, delete_sweep, parse_args
 
 
 class ColorFormatter(logging.Formatter):
@@ -64,8 +64,8 @@ def main() -> None:
         logger.info(f"Validating config: {config_path}")
         sweep_configs.append(SweepConfig.from_dict_config(dict_config))
 
-    if args.delete and args.update_params:
-        logger.error("--delete and --update-params are mutually exclusive.")
+    if args.delete and args.allow_param_change:
+        logger.error("--delete and --allow-param-change are mutually exclusive.")
         raise SystemExit(1)
 
     if args.delete:
@@ -75,7 +75,7 @@ def main() -> None:
         return
 
     for config in sweep_configs:
-        run_sweep(args, config)
+        _run_sweep_cli(args, config)
 
 
 if __name__ == "__main__":
