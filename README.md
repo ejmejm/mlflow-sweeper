@@ -66,6 +66,109 @@ mlflow-sweep-results my-experiment -s lr_sweep
 mlflow-sweep-results my-experiment -m loss --ascending -n 5
 ```
 
+## Programmatic sweeps (Python API)
+
+Instead of defining a `command` that spawns a subprocess for each trial, you can pass a Python function directly. This lets you run a full sweep entirely within a single script.
+
+### Basic example
+
+```python
+from omegaconf import OmegaConf
+from mlflow_sweeper.config import SweepConfig
+from mlflow_sweeper.runner import run_sweep
+
+config = SweepConfig.from_dict_config(OmegaConf.create({
+    "experiment": "my-experiment",
+    "sweep_name": "lr_grid",
+    "algorithm": "grid",
+    "optuna_storage": "sqlite:///optuna.db",
+    "mlflow_storage": "sqlite:///mlruns.db",
+    "output_dir": "./sweeps",
+    "parameters": {
+        "lr": [1e-3, 1e-4],
+        "batch_size": [32, 64],
+    },
+    "spec": {
+        "direction": "minimize",
+        "metric": "loss",
+    },
+}))
+
+def train(**params):
+    import mlflow
+    lr = float(params["lr"])
+    batch_size = int(params["batch_size"])
+    # ... your training code here ...
+    loss = (lr - 1e-4) ** 2 + (batch_size - 64) ** 2
+    mlflow.log_metric("loss", loss)
+
+run_sweep(config, train, n_jobs=4)
+```
+
+### Function contract
+
+Your function is called with `**param_values` (keyword arguments matching the parameter names in your config). An MLflow run is **already active** when your function runs, so you can call `mlflow.log_metric()`, `mlflow.log_param()`, etc. directly. Do **not** call `mlflow.start_run()` or `mlflow.end_run()` — the runner manages the trial's MLflow run for you.
+
+**Return value** determines how the optimization metric is resolved:
+
+| Return type | Behavior |
+|---|---|
+| `float` | Used directly as the optimization metric |
+| `dict[str, float]` | All entries logged via `mlflow.log_metrics()`; the entry matching `spec.metric` is used for optimization |
+| `None` | Metric is read from the MLflow run after the function returns (same as the subprocess path) |
+
+If your function raises an exception, the trial is marked as `FAILED`. With `abort_on_fail=True`, the first failure terminates the entire sweep.
+
+### Execution modes
+
+Control parallelism with `n_jobs` and `executor`:
+
+```python
+# Serial (inline, no pool)
+run_sweep(config, train, n_jobs=1)
+
+# Thread pool — works with closures/lambdas, limited by the GIL
+run_sweep(config, train, n_jobs=4, executor="thread")
+
+# Process pool (default) — real parallelism, requires an importable function
+run_sweep(config, train, n_jobs=4, executor="process")
+```
+
+When `n_jobs=1`, the `executor` parameter is ignored and the function runs inline.
+
+**Process pool requirements**: the function must be a top-level function in an importable module (not a closure, lambda, or nested function). If you need closures, use `executor="thread"`. Passing a non-importable function with `executor="process"` raises a clear error before the sweep starts.
+
+### Full API reference
+
+```python
+run_sweep(
+    config: SweepConfig,
+    fn: Callable[..., float | dict[str, float] | None],
+    *,
+    n_trials: int | None = None,       # Max trials; None = run until exhausted
+    n_jobs: int = 1,                    # Worker count
+    executor: "thread" | "process" = "process",
+    abort_on_fail: bool = False,        # Stop sweep on first failure
+    log_params: bool = False,           # Log param values on each trial run
+    no_plots: bool = False,             # Skip plot generation
+    allow_param_change: bool = False,   # Permit config changes (migrates trials)
+)
+```
+
+### Updating parameters
+
+If you change your sweep's parameters between runs, `run_sweep` will detect the change and abort with an error by default. Pass `allow_param_change=True` to migrate valid trials from the old config and continue running:
+
+```python
+# First run
+run_sweep(config_v1, train, n_jobs=4)
+
+# Later, with expanded parameters
+run_sweep(config_v2, train, n_jobs=4, allow_param_change=True)
+```
+
+Trials whose parameters are still valid under the new config are kept; incompatible trials are dropped from the Optuna study (but remain visible in MLflow). If the config hasn't actually changed, a warning is logged and the sweep proceeds normally.
+
 ## Config format (minimal example)
 
 ```yaml
@@ -184,7 +287,7 @@ If `plots` is omitted entirely, all plots are enabled with default settings. See
 - [ ] Delete failed runs when being replaced (do I really want to do this?)
 - [ ] Implement random sweep from config with run command and parameters
 - [ ] Implement hyperparameter sensitivity from config with run command and parameters
-- [ ] Fix bug where using the `n_jobs` option causes mlflow runs to not be parented properly
+- [x] Fix bug where using the `n_jobs` option causes mlflow runs to not be parented properly
 - [ ] Move locks to the MLFlow storage
-- [ ] Pass actual arg values to sweep command so that the function can easily be used externally
-- [ ] Allow sweeps to contain a command or a function to run
+- [x] Pass actual arg values to sweep command so that the function can easily be used externally
+- [x] Allow sweeps to contain a command or a function to run
