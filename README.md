@@ -284,7 +284,7 @@ If `plots` is omitted entirely, all plots are enabled with default settings. See
 - [x] Better handle failed runs, ideally retrying or just overwritting with the same param set
 - [x] Add test for testing retrying failed runs
 - [ ] Delete failed runs when being replaced (do I really want to do this?)
-- [ ] Implement random sweep from config with run command and parameters
+- [x] Implement random sweep from config with run command and parameters
 - [ ] Implement hyperparameter sensitivity from config with run command and parameters
 - [x] Fix bug where using the `n_jobs` option causes mlflow runs to not be parented properly
 - [ ] Move locks to the MLFlow storage
