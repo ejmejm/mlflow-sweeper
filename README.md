@@ -1,6 +1,6 @@
 # MLFlow Sweeper
 
-This module runs parameter sweeps (currently grid search) by executing a user-provided command for each trial and logging results to MLflow. It uses Optuna to enumerate/coordinate trials and supports both single-agent runs and multi-agent/distributed execution against shared storages.
+This module runs parameter sweeps (grid, random, or sensitivity search) by executing a user-provided command for each trial and logging results to MLflow. It uses Optuna to enumerate/coordinate trials and supports both single-agent runs and multi-agent/distributed execution against shared storages.
 
 - **Sweep identity / config ID**: each sweep is keyed by `experiment/sweep_name` (used as the Optuna study name) plus the configured storages. This lets you safely resume and/or distribute the *same* sweep across multiple agents, and also run *multiple different* sweeps at once (as long as their `experiment/sweep_name` differs).
 - **Single-agent vs multi-agent**:
@@ -226,6 +226,57 @@ parameters:
     log: false     # optional (default false)
 ```
 
+## Sweep algorithms
+
+Set `algorithm:` to choose how trials are enumerated:
+
+- **`grid`** -- runs the full cartesian product of all candidate values.
+- **`random`** -- random sampling, with an optional `spec.n_runs` cap and `spec.grid_params` expansion.
+- **`sensitivity`** -- varies **one parameter at a time** off a baseline (see below).
+
+### Sensitivity sweeps
+
+A sensitivity sweep holds every parameter at a baseline (default) value and varies one
+parameter at a time, instead of taking the cartesian product. It answers "how sensitive
+is the metric to each parameter individually?" at a fraction of a grid's cost.
+
+It uses two sections: the usual `parameters:` block gives a single base value per
+parameter, and a sibling `sensitivity:` block lists the candidate values to try for the
+parameters you want to perturb.
+
+```yaml
+algorithm: "sensitivity"
+
+parameters:          # base / defaults — one value each
+  lr: 0.001
+  depth: 2
+  batch_size: 32
+
+sensitivity:         # values to try, one parameter at a time (lists or typed ranges)
+  lr: [0.001, 0.01, 0.1]
+  depth: [2, 4, 8]
+```
+
+The trials run are:
+
+- one **baseline** run with every parameter at its default (`lr=0.001, depth=2, batch_size=32`), plus
+- for each parameter in `sensitivity:`, one run per **non-default** candidate value (all
+  other parameters held at their defaults) — here `lr=0.01`, `lr=0.1`, `depth=4`, `depth=8`.
+
+So the example above runs `1 + 2 + 2 = 5` trials. In general, the count is
+`1 + Σ (candidates_i − 1)`. A parameter not listed in `sensitivity:` (like `batch_size`)
+is held fixed. A candidate equal to the default is de-duplicated (the baseline already
+covers it), so a parameter listed as `lr: 0.001` in `parameters` plus `lr: [0.01, 0.1]`
+in `sensitivity` reads as "default 0.001, also try 0.01 and 0.1." Every entry in
+`parameters:` must be a single value; put the candidate lists under `sensitivity:`.
+
+A sensitivity sweep generates the `sensitivity` plot by default (when a `spec.metric`
+is configured): each parameter's curve holds the other parameters at their defaults, so
+it shows the metric across that parameter's candidates off the shared baseline.
+
+> Note: there is also a plot named `sensitivity` (see Plots below). The plot and the
+> algorithm are independent — they share a name but live at different config levels.
+
 ## Plots
 
 When a sweep completes and a `spec.metric` is configured, mlflow-sweeper automatically generates interactive plots and logs them as MLflow artifacts on the parent run. Use `--no-plots` to skip plot generation entirely. Plots require parameter logging to be generated. If your experiment script does not log parameters (i.e. `mlflow.log_params(...)`), you can use the `--log-params` flag to have the sweeper log the parameters for you.
@@ -233,7 +284,7 @@ When a sweep completes and a `spec.metric` is configured, mlflow-sweeper automat
 There are two built-in plots:
 
 - **`best_hyperparameters`** -- a ranked table of trials sorted by metric value. Works with any algorithm.
-- **`sensitivity`** -- an interactive line chart showing how each parameter affects the metric. Only supported for grid sweeps.
+- **`sensitivity`** -- an interactive line chart showing how each parameter affects the metric. Supported for grid and sensitivity sweeps.
 
 By default, all compatible plots are generated. If a plot is not compatible with the current sweep (e.g. sensitivity on a random sweep), a warning is logged and the plot is skipped.
 
@@ -289,7 +340,7 @@ Trials whose parameters are still valid under the new config are kept; incompati
 - [x] Add test for testing retrying failed runs
 - [ ] Delete failed runs when being replaced (do I really want to do this?)
 - [x] Implement random sweep from config with run command and parameters
-- [ ] Implement hyperparameter sensitivity from config with run command and parameters
+- [x] Implement hyperparameter sensitivity from config with run command and parameters
 - [x] Fix bug where using the `n_jobs` option causes mlflow runs to not be parented properly
 - [ ] Move locks to the MLFlow storage
 - [x] Pass actual arg values to sweep command so that the function can easily be used externally

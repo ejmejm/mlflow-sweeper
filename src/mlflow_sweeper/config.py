@@ -32,11 +32,14 @@ CONFIG_REQUIRED_FIELDS = [
     "mlflow_storage",
     "output_dir",
 ]
-VALID_ALGORITHMS = ["grid", "random"]
+VALID_ALGORITHMS = ["grid", "random", "sensitivity"]
 SHARED_SPEC_FIELDS = {"direction", "max_retry", "metric"}
 ALGORITHM_SPEC_FIELDS: dict[str, set[str]] = {
     "grid": set(),
     "random": {"n_runs", "grid_params"},
+    # Sensitivity uses only shared spec fields; the per-parameter candidate values
+    # live in a top-level ``sensitivity`` block (a sibling of ``parameters``).
+    "sensitivity": set(),
 }
 
 
@@ -62,6 +65,21 @@ def validate_config(config: DictConfig) -> None:
     # Validate algorithm
     if config.algorithm not in VALID_ALGORITHMS:
         raise ValueError(f"'algorithm' must be one of {VALID_ALGORITHMS}!")
+
+    # Validate the top-level `sensitivity` block (sibling of `parameters`). It lists
+    # the candidate values to try one-at-a-time and is only meaningful for the
+    # sensitivity algorithm.
+    if config.algorithm == "sensitivity":
+        if "sensitivity" not in config or not config.sensitivity:
+            raise ValueError(
+                "A sensitivity sweep requires a non-empty top-level 'sensitivity' "
+                "section listing the candidate values to try per parameter."
+            )
+    elif "sensitivity" in config:
+        raise ValueError(
+            "The top-level 'sensitivity' section is only valid for algorithm "
+            "'sensitivity'."
+        )
 
     # Validate direction if present
     if "spec" in config and "direction" in config.spec:
@@ -321,6 +339,15 @@ class SweepConfig:
     command: str | None = None
     output_dir: str = "output"
     plots: PlotsConfig = field(default_factory=PlotsConfig)
+    # For the sensitivity algorithm: the raw ``sensitivity`` config block (parameter
+    # name -> candidate values). Stored verbatim so that changes to the candidate values
+    # are detected by config-change tracking (the candidates otherwise live only in
+    # ``param_specs``, which is excluded from tracking). ``None`` for grid/random sweeps.
+    sensitivity: dict[str, Any] | None = None
+    # For the sensitivity algorithm: maps each varied parameter name to its baseline
+    # (default) value. Its keys also identify which parameters are varied. ``None`` for
+    # grid/random sweeps.
+    sensitivity_defaults: dict[str, Any] | None = None
 
     @classmethod
     def from_dict_config(cls, config: DictConfig) -> "SweepConfig":
@@ -347,6 +374,18 @@ class SweepConfig:
         if "command" in config:
             kwargs["command"] = config.command
 
+        param_specs = config_params_to_spec_dict(config.parameters)
+        sensitivity_section = None
+        sensitivity_defaults = None
+        if config.algorithm == "sensitivity":
+            param_specs, sensitivity_defaults = _build_sensitivity_specs(
+                param_specs, config.sensitivity,
+            )
+            sensitivity_section = OmegaConf.to_container(
+                config.sensitivity, throw_on_missing=True,
+            )
+            assert isinstance(sensitivity_section, dict)
+
         return cls(
             experiment = config.experiment,
             sweep_name = config.sweep_name,
@@ -354,9 +393,11 @@ class SweepConfig:
             mlflow_storage = config.mlflow_storage,
             algorithm = config.algorithm,
             parameters = params,
-            param_specs = config_params_to_spec_dict(config.parameters),
+            param_specs = param_specs,
             spec = SpecConfig.from_dict_config(config.get("spec")),
             plots = PlotsConfig.from_config(config.get("plots"), config.get("plot_params")),
+            sensitivity = sensitivity_section,
+            sensitivity_defaults = sensitivity_defaults,
             **kwargs,
         )
 
@@ -565,4 +606,56 @@ def config_params_to_spec_dict(parameters: dict[str, Any] | DictConfig) -> dict[
     for name, value in params_dict.items():
         param_specs[name] = param_from_config_entry(name, value)
     return param_specs
+
+
+def _build_sensitivity_specs(
+    base_specs: dict[str, ParamSpec],
+    sensitivity: dict[str, Any] | DictConfig,
+) -> tuple[dict[str, ParamSpec], dict[str, Any]]:
+    """Merge the base ``parameters`` defaults with the ``sensitivity`` candidate values.
+
+    A sensitivity sweep keeps every parameter at its baseline (the value given in
+    ``parameters``) and varies one parameter at a time over the candidates listed in the
+    ``sensitivity`` block.
+
+    For each varied parameter, the effective spec is replaced with a
+    ``CategoricalParam`` whose choices are ``[default, *non-default candidates]`` so that
+    ``suggest()`` routes through the Optuna sampler (an ``AtomicParam`` would bypass it)
+    and so the categorical distribution always contains the baseline value.
+
+    Args:
+        base_specs: Parsed ``parameters`` specs; every entry must be a single value.
+        sensitivity: The ``sensitivity`` block (parameter name -> candidate values).
+
+    Returns:
+        A tuple of (effective param specs, {varied param name: default value}).
+
+    Raises:
+        ValueError: If a base parameter is multi-valued, the sensitivity block is empty,
+            or a varied parameter has no default in ``parameters``.
+    """
+    for name, spec in base_specs.items():
+        if not isinstance(spec, AtomicParam):
+            raise ValueError(
+                f"In a sensitivity sweep, 'parameters' must hold single base values, "
+                f"but '{name}' is multi-valued; put candidate lists under 'sensitivity'."
+            )
+
+    sens_specs = config_params_to_spec_dict(sensitivity)
+    if not sens_specs:
+        raise ValueError("A sensitivity sweep requires a non-empty 'sensitivity' section.")
+
+    param_specs = dict(base_specs)
+    defaults: dict[str, Any] = {}
+    for name, sens_spec in sens_specs.items():
+        if name not in base_specs:
+            raise ValueError(
+                f"Sensitivity parameter '{name}' has no default value in 'parameters'."
+            )
+        default = base_specs[name].value
+        choices = [default] + [c for c in sens_spec.to_list() if c != default]
+        param_specs[name] = CategoricalParam(name = name, values = choices)
+        defaults[name] = default
+
+    return param_specs, defaults
 

@@ -85,6 +85,90 @@ flowchart TD
     style Loop fill:#0d0d1a,stroke:#3a3a5a
 ```
 
+## Sensitivity Sampler
+
+A sensitivity sweep holds every parameter at a baseline (default) value and
+varies **one parameter at a time**, instead of running the full cartesian
+product. It answers "how sensitive is the metric to each parameter
+individually?" at a fraction of a grid's cost.
+
+`SensitivitySampler` subclasses `GridSampler` and overrides **only** how the
+trial list (`_all_grids`) is built. Everything that makes the grid sampler work
+— `before_trial` (FileLock + grid-ID assignment + preemption),
+`_get_pending_grid_ids` (the retry accounting described in
+[How retries work](#how-retries-work)), the no-op `after_trial`, and
+`is_exhausted` — is **inherited unchanged**. So the runtime flow is identical to
+the Grid Sampler diagram above; the only difference is the contents of the grid.
+
+### Building the trial list
+
+The config has two sections: `parameters` gives a single base value per
+parameter, and a sibling `sensitivity` block lists the candidate values to try
+for the parameters you want to perturb. Only the varied (multi-valued)
+parameters enter the grid; parameters held fixed are atomic and bypass the
+sampler entirely.
+
+```
+parameters:  a: 1, b: 10, c: 5      sensitivity:  a: [1, 2, 3], b: [10, 20]
+
+  grid 0 (baseline):  a=1, b=10      <- every varied param at its default
+  grid 1:             a=2, b=10      <- vary a (b at default)
+  grid 2:             a=3, b=10      <- vary a
+  grid 3:             a=1, b=20      <- vary b (a at default)
+
+  (c is not in `sensitivity`, so it stays fixed at 5 on every trial)
+```
+
+So `_all_grids` holds **1 baseline + one point per non-default candidate value**:
+`1 + Σ (candidates_i − 1)` trials, versus `Π candidates_i` for a grid. A
+candidate equal to the default is skipped (the baseline already covers it). From
+there, grid-ID assignment, retries, preemption, and `is_exhausted` behave
+exactly as for the Grid Sampler.
+
+```mermaid
+flowchart TD
+    Start([run_sweep]) --> Init[Create/load Optuna study<br>+ MLflow parent run]
+    Init --> Sync[Sync: void Optuna trials<br>whose MLflow runs were deleted]
+    Sync --> Complete{Study already<br>complete?}
+    Complete -- YES --> DoneEarly([Return early])
+    Complete -- NO --> Loop
+
+    subgraph Loop [Optimization Loop]
+        Ask[study.ask<br>Creates trial in<br>RUNNING state] --> BeforeTrial
+
+        subgraph BeforeTrial [SensitivitySampler.before_trial inherited from GridSampler]
+            Lock[Acquire FileLock] --> Pending[Compute pending grid IDs<br>over the one-at-a-time list]
+            Pending --> HasPending{Pending IDs<br>exist?}
+            HasPending -- YES --> Assign[Assign random<br>pending grid ID<br>to trial]
+            HasPending -- NO --> Preempt[Mark trial as<br>PREEMPTED]
+        end
+
+        Assign --> RunSub[Run subprocess<br>with assigned params]
+        Preempt --> PruneStop[Set trial state = PRUNED<br>study.stop]
+        PruneStop --> NextIter
+
+        RunSub --> ExitCode{Subprocess<br>exit code}
+
+        ExitCode -- "0" --> Success[Optuna: COMPLETE<br>MLflow: FINISHED]
+        ExitCode -- "!= 0" --> AbortCheck{--abort-on-fail?}
+        AbortCheck -- YES --> Abort([TrialRunAbortError<br>Sweep killed])
+        AbortCheck -- NO --> Fail[Optuna: FAIL<br>MLflow: FAILED<br>TrialRunError caught]
+
+        Success --> NextIter{n_trials reached<br>or timed out?}
+        Fail --> NextIter
+
+        NextIter -- NO --> Ask
+        NextIter -- YES --> ExitLoop
+    end
+
+    ExitLoop --> ParentStatus{Study<br>complete?}
+    ParentStatus -- YES --> Finished([Parent run = FINISHED])
+    ParentStatus -- NO --> Running([Parent run = RUNNING])
+
+    style BeforeTrial fill:#1a1a2e,stroke:#4a4a6a
+    style Loop fill:#0d0d1a,stroke:#3a3a5a
+```
+
 ## Random Sampler
 
 ```mermaid

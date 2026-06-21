@@ -245,3 +245,76 @@ def test_sensitivity_on_random_sweep_warns_but_succeeds(sweep_harness: SweepHarn
     artifacts = _list_plot_artifacts(sweep_harness)
     assert "plots/best_hyperparameters.html" in artifacts
     assert "plots/sensitivity.html" not in artifacts
+
+
+def test_sensitivity_sweep_generates_sensitivity_plot_by_default(
+    sweep_harness: SweepHarness,
+) -> None:
+    """A sensitivity sweep produces the sensitivity plot with no extra config."""
+    config_path = sweep_harness.write_config(
+        parameters={"a": 1, "b": 10, "c": 5},
+        algorithm="sensitivity",
+        sensitivity={"a": [1, 2, 3], "b": [10, 20]},
+        command=_log_metric_command(sweep_harness),
+        spec={"metric": "loss", "direction": "minimize"},
+    )
+
+    sweep_harness.run_cli(config_path, "--log-params")
+
+    artifacts = _list_plot_artifacts(sweep_harness)
+    assert "plots/best_hyperparameters.html" in artifacts
+    assert "plots/sensitivity.html" in artifacts
+
+
+def test_filter_one_at_a_time_holds_others_at_default() -> None:
+    """Each param's sensitivity curve excludes trials that perturbed another param."""
+    import pandas as pd
+
+    from mlflow_sweeper.plots import _filter_one_at_a_time
+
+    # Mirror a one-at-a-time sweep: defaults a=1, b=10; baseline loss 16.
+    df = pd.DataFrame([
+        {"a": 1, "b": 10, "loss": 16},  # baseline
+        {"a": 2, "b": 10, "loss": 17},  # vary a
+        {"a": 3, "b": 10, "loss": 18},  # vary a
+        {"a": 1, "b": 20, "loss": 26},  # vary b
+    ])
+    varying = ["a", "b"]
+
+    fa = _filter_one_at_a_time(df, "a", varying, set())
+    # b held at its default (10), so the b=20 trial is excluded.
+    assert set(zip(fa["a"], fa["b"])) == {(1, 10), (2, 10), (3, 10)}
+    # Baseline point is the true baseline, not an average with the b=20 trial.
+    assert fa[fa["a"] == 1]["loss"].mean() == 16
+
+    fb = _filter_one_at_a_time(df, "b", varying, set())
+    assert set(zip(fb["a"], fb["b"])) == {(1, 10), (1, 20)}
+    assert fb[fb["b"] == 10]["loss"].mean() == 16
+
+    # A param named in shown_params (e.g. used as hue) is not held fixed.
+    fa_hue_b = _filter_one_at_a_time(df, "a", varying, {"b"})
+    assert set(zip(fa_hue_b["a"], fa_hue_b["b"])) == {(1, 10), (2, 10), (3, 10), (1, 20)}
+
+
+def test_filter_one_at_a_time_uses_mode_not_min() -> None:
+    """The held-fixed baseline is the most common value, even when it is not the minimum.
+
+    This guards against config-vs-MLflow value reformatting (e.g. unresolved ${...}
+    interpolations): the baseline is derived from the logged data, not the config.
+    """
+    import pandas as pd
+
+    from mlflow_sweeper.plots import _filter_one_at_a_time
+
+    # Default a=2 (NOT the min), candidates [1, 2, 3]; default b=10.
+    df = pd.DataFrame([
+        {"a": 2, "b": 10, "loss": 12},  # baseline
+        {"a": 1, "b": 10, "loss": 11},  # vary a
+        {"a": 3, "b": 10, "loss": 13},  # vary a
+        {"a": 2, "b": 20, "loss": 22},  # vary b
+    ])
+    varying = ["a", "b"]
+
+    # For b's curve, a must be held at its default 2 (the mode), not 1 (the min).
+    fb = _filter_one_at_a_time(df, "b", varying, set())
+    assert set(zip(fb["a"], fb["b"])) == {(2, 10), (2, 20)}

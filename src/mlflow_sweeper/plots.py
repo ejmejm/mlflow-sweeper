@@ -46,9 +46,9 @@ def generate_plots(study: optuna.Study, config: SweepConfig) -> None:
         logger.info("best_hyperparameters plot disabled; skipping.")
 
     if "sensitivity" in plots_config.enabled_plots:
-        if config.algorithm != "grid":
+        if config.algorithm not in ("grid", "sensitivity"):
             logger.warning(
-                "Sensitivity plot is only supported for grid sweeps "
+                "Sensitivity plot is only supported for grid and sensitivity sweeps "
                 "(current algorithm: '%s'); skipping.",
                 config.algorithm,
             )
@@ -536,6 +536,39 @@ def plot_best_hyperparameters(
     _log_html(html, "best_hyperparameters.html")
 
 
+def _filter_one_at_a_time(
+    df: pd.DataFrame,
+    tab_param: str,
+    varying_params: list[str],
+    shown_params: set[str],
+) -> pd.DataFrame:
+    """Isolate one parameter's one-at-a-time sensitivity curve.
+
+    For a sensitivity sweep, keep only rows where every varied parameter other than the
+    ones being visualized (the x-axis ``tab_param`` plus any hue/split/averaged params in
+    ``shown_params``) sits at its baseline value. Without this, a trial that perturbed a
+    *different* parameter still has ``tab_param`` at its default and would be averaged into
+    ``tab_param``'s baseline point, contaminating the curve.
+
+    The baseline value of each held parameter is taken to be its most common value in the
+    data: in a one-at-a-time sweep the default appears in the baseline run plus every trial
+    that varied a different parameter, so it is the mode. Deriving it from the logged data
+    (rather than the config) keeps this robust to values being reformatted between the
+    config and MLflow — e.g. unresolved ``${...}`` interpolations resolved by the trial, or
+    scientific notation — which would otherwise never compare equal and blank the plot.
+    """
+    held = [
+        p for p in varying_params
+        if p != tab_param and p not in shown_params and p in df.columns
+    ]
+    mask = pd.Series(True, index=df.index)
+    for p in held:
+        modes = df[p].mode()
+        if len(modes):
+            mask &= df[p] == modes.iloc[0]
+    return df[mask]
+
+
 def plot_sensitivity(
     config: SweepConfig,
     plots_config: PlotsConfig,
@@ -599,8 +632,19 @@ def plot_sensitivity(
                 key_parts.append(str(t_idx))
                 key = "-".join(key_parts)
 
+                # For a sensitivity sweep, each curve must hold the other varied
+                # parameters at their defaults; otherwise trials that perturbed a
+                # different parameter (which still have this one at its default)
+                # contaminate the baseline point.
+                fig_df = sub_df
+                if config.algorithm == "sensitivity":
+                    shown = set(hue_params) | set(split_by) | set(average_over)
+                    fig_df = _filter_one_at_a_time(
+                        sub_df, tab_param, varying_params, shown,
+                    )
+
                 figures[key] = _build_sensitivity_figure(
-                    sub_df, tab_param, metric, hue_params, pow2_params,
+                    fig_df, tab_param, metric, hue_params, pow2_params,
                 )
 
     if not figures:

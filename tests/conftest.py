@@ -40,6 +40,7 @@ class SweepHarness:
         command: str | None = None,
         spec: dict[str, Any] | None = None,
         algorithm: str = "grid",
+        sensitivity: dict[str, Any] | None = None,
         plots: list[str] | None = None,
         plot_params: dict[str, Any] | None = None,
     ) -> str:
@@ -57,6 +58,8 @@ class SweepHarness:
             "mlflow_storage": self.mlflow_storage,
             "output_dir": self.output_dir,
         }
+        if sensitivity is not None:
+            config["sensitivity"] = sensitivity
         if spec is not None:
             config["spec"] = spec
         if plots is not None:
@@ -85,6 +88,7 @@ class SweepHarness:
         parameters: dict[str, Any],
         algorithm: str = "grid",
         spec: dict[str, Any] | None = None,
+        sensitivity: dict[str, Any] | None = None,
     ) -> Any:
         """Build a SweepConfig in-process (no YAML on disk).
 
@@ -102,6 +106,8 @@ class SweepHarness:
             "mlflow_storage": self.mlflow_storage,
             "output_dir": self.output_dir,
         }
+        if sensitivity is not None:
+            config_dict["sensitivity"] = sensitivity
         if spec is not None:
             config_dict["spec"] = spec
         return SweepConfig.from_dict_config(OmegaConf.create(config_dict))
@@ -113,12 +119,15 @@ class SweepHarness:
         parameters: dict[str, Any],
         algorithm: str = "grid",
         spec: dict[str, Any] | None = None,
+        sensitivity: dict[str, Any] | None = None,
         **kwargs,
     ) -> None:
         """Build a config and call ``run_sweep`` programmatically."""
         from mlflow_sweeper.runner import run_sweep
 
-        config = self.build_config(parameters=parameters, algorithm=algorithm, spec=spec)
+        config = self.build_config(
+            parameters=parameters, algorithm=algorithm, spec=spec, sensitivity=sensitivity,
+        )
         run_sweep(config, fn, **kwargs)
 
     def mlflow_client(self) -> MlflowClient:

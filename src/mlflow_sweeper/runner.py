@@ -40,6 +40,7 @@ from mlflow_sweeper.optimize import optimize_study
 from mlflow_sweeper.plots import generate_plots
 from mlflow_sweeper.samplers.grid import GridSampler
 from mlflow_sweeper.samplers.random import RandomSampler
+from mlflow_sweeper.samplers.sensitivity import SensitivitySampler
 
 
 logger = logging.getLogger(__name__)
@@ -174,6 +175,18 @@ def make_sampler(config: SweepConfig) -> optuna.samplers.BaseSampler:
             n_runs=config.spec.n_runs,
             max_retry_count=config.spec.max_retry,
             grid_search_space=grid_search_space,
+        )
+    elif config.algorithm == "sensitivity":
+        # ``param_specs`` for varied params is a CategoricalParam whose choices already
+        # include the default; ``sensitivity_defaults`` supplies the baseline value.
+        search_space = {
+            name: config.param_specs[name].to_list()
+            for name in config.sensitivity_defaults
+        }
+        return SensitivitySampler(
+            search_space,
+            defaults=config.sensitivity_defaults,
+            max_retry_count=config.spec.max_retry,
         )
     raise ValueError(f"Invalid sweep algorithm: {config.algorithm}")
 
@@ -622,7 +635,7 @@ def update_sweep_params(
 
     # 5. Add valid trials to new study with correct system attrs.
     for old_trial in valid_trials:
-        if config.algorithm == "grid":
+        if config.algorithm in ("grid", "sensitivity"):
             # Compute grid_id by finding the matching point in the shuffled grid.
             # AtomicParam values are NOT in Optuna trial params (they bypass
             # trial.suggest_*), so fill them in from the spec.
